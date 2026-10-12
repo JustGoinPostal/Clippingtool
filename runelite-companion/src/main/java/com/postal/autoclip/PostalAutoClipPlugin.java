@@ -141,12 +141,14 @@ public class PostalAutoClipPlugin extends Plugin
         }
 
         boolean interactionMatch = actor == recentInteractionTarget || (local != null && local.getInteracting() == actor);
+        int ticksSinceInteraction = actor == recentInteractionTarget ? ticksSince(recentInteractionTick) : -1;
         String payload = "{\"actor_type\":\"player\",\"local_player\":false,"
             + "\"name\":\"" + esc(name) + "\","
             + "\"attributed_to_local\":true,"
             + "\"last_confirmed_damage\":" + recentDamageAmount + ","
             + "\"ticks_since_local_damage\":" + ticksSinceDamage + ","
-            + "\"interaction_match\":" + interactionMatch + "}";
+            + "\"interaction_match\":" + interactionMatch + ","
+            + "\"ticks_since_interaction\":" + ticksSinceInteraction + "}";
         send("pvp_kill", 1.25, payload);
     }
 
@@ -176,11 +178,13 @@ public class PostalAutoClipPlugin extends Plugin
                 String name = actor.getName() == null ? "unknown" : actor.getName();
                 String actorType = actor instanceof Player ? "player" : "npc";
                 boolean interactionMatch = actor == recentInteractionTarget || (local != null && local.getInteracting() == actor);
+                int ticksSinceInteraction = actor == recentInteractionTarget ? ticksSince(recentInteractionTick) : -1;
                 String payload = "{\"amount\":" + amount
                     + ",\"target_local\":false"
                     + ",\"attributed_to_local\":true"
                     + ",\"target_type\":\"" + actorType + "\""
                     + ",\"interaction_match\":" + interactionMatch
+                    + ",\"ticks_since_interaction\":" + ticksSinceInteraction
                     + ",\"name\":\"" + esc(name) + "\"}";
                 send("big_hit", Math.min(1.5, 0.65 + amount / 100.0), payload);
             }
@@ -275,7 +279,7 @@ public class PostalAutoClipPlugin extends Plugin
                     name = String.valueOf(item.getId());
                 }
 
-                int price = 0;
+                long price = 0;
                 try
                 {
                     price = itemManager.getItemPrice(item.getId());
@@ -284,7 +288,7 @@ public class PostalAutoClipPlugin extends Plugin
                 {
                 }
 
-                long value = (long) Math.max(0, price) * Math.max(0, item.getQuantity());
+                long value = Math.max(0L, price) * Math.max(0, item.getQuantity());
                 totalValue += value;
                 rows.add("{\"id\":" + item.getId()
                     + ",\"quantity\":" + item.getQuantity()
