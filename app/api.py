@@ -10,13 +10,19 @@ from .watcher import scan_once, start_watcher
 from .pipeline import process_job, render_clip_id, render_all_variants
 from .learning import learned_profile
 from .hooks import generate_hook
+from .publishing import (
+    platform_status, connect_youtube, tiktok_creator_info, queue_post,
+    process_due_posts, start_publish_worker,
+)
 
-app=FastAPI(title="Postal AutoClip",version="0.5.0")
+app=FastAPI(title="Postal AutoClip",version="0.6.0")
 app.mount("/static",StaticFiles(directory=ROOT/"app"/"static"),name="static")
 
 @app.on_event("startup")
 def startup():
-    db.init_db(); load_settings(); start_watcher()
+    db.init_db(); s=load_settings(); start_watcher()
+    if s.publishing_enabled:
+        start_publish_worker()
 
 @app.get("/",response_class=HTMLResponse)
 def home():
@@ -25,12 +31,13 @@ def home():
 @app.get("/api/status")
 def status():
     s=load_settings()
-    return {"ok":True,"version":"0.5.0","watch_folder":str(s.watch_path),
+    return {"ok":True,"version":"0.6.0","watch_folder":str(s.watch_path),
             "output_folder":str(s.output_path),"render_variants":s.render_variants,
             "primary_variant":s.primary_variant,"layout":s.layout,
             "auto_hook_enabled":s.auto_hook_enabled,"dynamic_zoom_enabled":s.dynamic_zoom_enabled,
             "quality_scoring_enabled":s.quality_scoring_enabled,
-            "best_variant_auto_select":s.best_variant_auto_select}
+            "best_variant_auto_select":s.best_variant_auto_select,
+            "publishing_enabled":s.publishing_enabled}
 
 @app.get("/api/jobs")
 def jobs():
@@ -69,6 +76,7 @@ def edit_clip(clip_id:int,payload:dict=Body(...)):
     if changed:
         db.exec_sql("""UPDATE clips SET start=?,end=?,hook_text=?,status='candidate',
                     output_path='',best_variant='' WHERE id=?""",(start,end,hook_text,clip_id))
+        db.exec_sql("DELETE FROM publish_queue WHERE clip_id=? AND status IN ('queued','failed')",(clip_id,))
         db.exec_sql("DELETE FROM renders WHERE clip_id=?",(clip_id,))
     return {"ok":True,"clip_id":clip_id,"start":start,"end":end,"hook_text":hook_text,
             "renders_invalidated":changed}
@@ -80,6 +88,7 @@ def regenerate_hook(clip_id:int):
     hook=generate_hook(row)
     db.exec_sql("UPDATE clips SET hook_text=?,status='candidate',output_path='',best_variant='' WHERE id=?",
                 (hook,clip_id))
+    db.exec_sql("DELETE FROM publish_queue WHERE clip_id=? AND status IN ('queued','failed')",(clip_id,))
     db.exec_sql("DELETE FROM renders WHERE clip_id=?",(clip_id,))
     return {"ok":True,"hook_text":hook}
 
@@ -170,6 +179,86 @@ def game_event_batch(payload:dict=Body(...)):
 def game_events_recent(limit:int=25):
     return db.q("SELECT id,event_time,event_type,confidence,payload_json,source,created_at FROM game_events ORDER BY id DESC LIMIT ?",
                 (max(1,min(250,limit)),))
+
+# -------------------- v0.6 publishing --------------------
+@app.get("/api/publishing/status")
+def publishing_status():
+    return {"platforms":platform_status(),"queue":db.publish_jobs(100)}
+
+@app.post("/api/publishing/youtube/connect")
+def publishing_youtube_connect():
+    def task():
+        try: connect_youtube()
+        except Exception as e: print(f"YouTube OAuth failed: {e}")
+    threading.Thread(target=task,daemon=True,name="youtube-oauth").start()
+    return {"started":True,"message":"OAuth browser flow started on this PC."}
+
+@app.get("/api/publishing/tiktok/creator")
+def publishing_tiktok_creator():
+    try:
+        return tiktok_creator_info()
+    except Exception as e:
+        raise HTTPException(400,f"{type(e).__name__}: {e}")
+
+@app.post("/api/publishing/queue")
+def publishing_queue(payload:dict=Body(...)):
+    platform=str(payload.get("platform") or "").lower()
+    if platform not in {"youtube","tiktok","instagram"}: raise HTTPException(400,"Unknown platform")
+    render_id=int(payload.get("render_id") or 0)
+    if not render_id: raise HTTPException(400,"render_id is required")
+    scheduled=float(payload.get("scheduled_for") or time.time())
+    try:
+        job_id=queue_post(render_id,platform,scheduled,
+            title=str(payload.get("title") or "")[:220],
+            caption=str(payload.get("caption") or "")[:4000],
+            hashtags=str(payload.get("hashtags") or "")[:1000],
+            privacy=str(payload.get("privacy") or ("SELF_ONLY" if platform=="tiktok" else "private")),
+            options=payload.get("options") if isinstance(payload.get("options"),dict) else {})
+    except KeyError:
+        raise HTTPException(404,"Render not found")
+    return {"ok":True,"publish_job_id":job_id,"scheduled_for":scheduled}
+
+@app.post("/api/clips/{clip_id}/queue-best")
+def publishing_queue_best(clip_id:int,payload:dict=Body(...)):
+    clip=db.q("SELECT * FROM clips WHERE id=?",(clip_id,),one=True)
+    if not clip: raise HTTPException(404,"Clip not found")
+    render=db.q("SELECT * FROM renders WHERE clip_id=? ORDER BY is_best DESC,quality_score DESC,id LIMIT 1",(clip_id,),one=True)
+    if not render: raise HTTPException(400,"Render this clip first")
+    platform=str(payload.get("platform") or "youtube").lower()
+    if platform not in {"youtube","tiktok","instagram"}: raise HTTPException(400,"Unknown platform")
+    default_privacy="SELF_ONLY" if platform=="tiktok" else "private"
+    job_id=queue_post(int(render["id"]),platform,float(payload.get("scheduled_for") or time.time()),
+        title=str(payload.get("title") or clip.get("title") or "")[:220],
+        caption=str(payload.get("caption") or clip.get("description") or "")[:4000],
+        hashtags=str(payload.get("hashtags") or clip.get("hashtags") or "")[:1000],
+        privacy=str(payload.get("privacy") or default_privacy),
+        options=payload.get("options") if isinstance(payload.get("options"),dict) else {})
+    return {"ok":True,"publish_job_id":job_id,"render_id":render["id"],"variant":render["variant"]}
+
+@app.get("/api/publishing/queue")
+def publishing_queue_list(limit:int=100):
+    return db.publish_jobs(limit)
+
+@app.delete("/api/publishing/queue/{job_id}")
+def publishing_queue_delete(job_id:int):
+    row=db.q("SELECT * FROM publish_queue WHERE id=?",(job_id,),one=True)
+    if not row: raise HTTPException(404,"Publish job not found")
+    if row["status"] in {"publishing","published"}: raise HTTPException(400,"Publishing/published jobs cannot be deleted here")
+    db.exec_sql("DELETE FROM publish_queue WHERE id=?",(job_id,))
+    return {"ok":True}
+
+@app.post("/api/publishing/queue/{job_id}/retry")
+def publishing_queue_retry(job_id:int):
+    row=db.q("SELECT * FROM publish_queue WHERE id=?",(job_id,),one=True)
+    if not row: raise HTTPException(404,"Publish job not found")
+    db.update_publish_job(job_id,status="queued",scheduled_for=time.time(),error="")
+    threading.Thread(target=process_due_posts,daemon=True).start()
+    return {"ok":True}
+
+@app.post("/api/publishing/run-due")
+def publishing_run_due():
+    threading.Thread(target=process_due_posts,daemon=True).start()
+    return {"started":True}
 
 @app.get("/api/settings")
 def settings(): return load_settings().model_dump()
