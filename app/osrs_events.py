@@ -13,6 +13,7 @@ EVENT_WEIGHTS: dict[str, float] = {
     "player_death": 34,
     "npc_loot": 18,
     "big_hit": 18,
+    "big_hit_taken": 13,
     "loot": 20,
     "chat_reaction": 14,
     "boss_kill": 24,
@@ -50,11 +51,17 @@ def normalize_event_type(event_type: str, payload: dict[str, Any] | None = None)
         actor_type = str(payload.get("actor_type", "")).lower()
         if actor_type == "player" and payload.get("local_player"):
             return "player_death"
-        if actor_type == "player":
+        # Legacy actor_death events are no longer assumed to be PvP kills unless
+        # the companion explicitly confirms local attribution.
+        if actor_type == "player" and payload.get("attributed_to_local"):
             return "pvp_kill"
-        return "boss_kill" if payload.get("boss") else "runelite_event"
+        return "runelite_event"
     if raw in {"hitsplatapplied", "hitsplat_applied", "hitsplat"}:
-        return "big_hit"
+        if payload.get("target_local"):
+            return "big_hit_taken"
+        if payload.get("attributed_to_local"):
+            return "big_hit"
+        return "runelite_event"
     if "raid" in raw and ("complete" in raw or "finish" in raw):
         return "raid_complete"
     if any(w in text for w in DROP_WORDS):
@@ -72,9 +79,10 @@ def event_strength(event: dict[str, Any]) -> float:
     payload = event.get("payload") or {}
     confidence = float(event.get("confidence", 1.0) or 1.0)
     confidence = max(0.25, min(1.5, confidence))
-    if typ == "big_hit":
+    if typ in {"big_hit", "big_hit_taken"}:
         amount = float(payload.get("amount", 0) or 0)
-        base += min(22.0, max(0.0, amount - 25.0) * 0.7)
+        multiplier = 0.7 if typ == "big_hit" else 0.45
+        base += min(22.0, max(0.0, amount - 25.0) * multiplier)
     items = payload.get("items")
     if isinstance(items, list):
         base += min(10.0, len(items) * 1.5)
@@ -113,8 +121,11 @@ def summarize_event(event: dict[str, Any]) -> str:
         if names: bits.append(", ".join(names))
     if p.get("message"):
         bits.append(re.sub(r"<[^>]+>", "", str(p["message"]))[:120])
-    if typ == "big_hit" and p.get("amount") is not None:
-        bits.append(f"{p['amount']} damage")
+    if typ in {"big_hit", "big_hit_taken"} and p.get("amount") is not None:
+        direction = "dealt" if typ == "big_hit" else "taken"
+        bits.append(f"{p['amount']} damage {direction}")
+    if typ == "pvp_kill" and p.get("last_confirmed_damage") is not None:
+        bits.append(f"last hit {p['last_confirmed_damage']}")
     return f"RuneLite {typ.replace('_',' ')}" + (": " + " · ".join(bits) if bits else "")
 
 
