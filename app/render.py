@@ -6,6 +6,8 @@ from .media import require_ffmpeg
 from .captions import write_ass
 
 SPEECHY_TYPES={"speech","reaction","chat"}
+COMBAT_TYPES={"pvp","pvp_kill","death","player_death","big_hit","combat","player_loot","boss_kill"}
+REWARD_TYPES={"drop","rare_drop","raid_reward","raid_complete","collection_log","loot","npc_loot"}
 
 def _ffmpeg_filter_path(p: Path):
     x=str(p.resolve()).replace("\\","/")
@@ -20,9 +22,9 @@ def _features(clip: dict) -> dict:
 def focus_mode(clip: dict) -> str:
     event=str(clip.get("event_type") or "").lower()
     f=_features(clip)
-    if event in {"pvp","death","big_hit","combat","player_loot"}:
+    if event in COMBAT_TYPES:
         return "combat"
-    if event in {"drop","raid_reward","collection_log","loot","npc_loot"}:
+    if event in REWARD_TYPES:
         return "chat"
     if float(f.get("ui_change",0) or 0) > max(float(f.get("chat_change",0) or 0),0.35):
         return "ui"
