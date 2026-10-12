@@ -46,7 +46,7 @@ def _recent_rows(platform: str,days: int) -> list[dict[str,Any]]:
                      AND (q.scheduled_for>=? OR q.published_at>=?)""",(platform,cutoff,cutoff))
 
 
-def _local_slots(start_epoch: float,days: int,slots: list[str]) -> list[float]:
+def _local_slots(start_epoch: float,days:int,slots:list[str]) -> list[float]:
     base=datetime.fromtimestamp(float(start_epoch)).astimezone(); tz=base.tzinfo
     out=[]
     for d in range(max(1,int(days))):
@@ -61,24 +61,26 @@ def _local_slots(start_epoch: float,days: int,slots: list[str]) -> list[float]:
     return sorted(out)
 
 
-def _privacy(platform: str,s) -> str:
+def _privacy(platform:str,s) -> str:
     if platform=="youtube": return s.youtube_default_privacy
     if platform=="tiktok": return s.tiktok_default_privacy
     return s.instagram_default_privacy
 
 
-def _scheduled_time(base_time: float,offset_minutes: float,sync_same_date: bool) -> float:
+def _scheduled_time(base_time:float,offset_minutes:float,sync_same_date:bool) -> float:
     proposed=base_time+60*float(offset_minutes)
     if not sync_same_date:
         return proposed
     base_dt=datetime.fromtimestamp(base_time).astimezone()
     proposed_dt=datetime.fromtimestamp(proposed).astimezone()
-    # Same content story stays on the same local calendar date across platforms.
     return proposed if proposed_dt.date()==base_dt.date() else base_time
 
 
 def _render_for_platform(clip_id:int,platform:str,fallback:dict[str,Any]) -> dict[str,Any]:
-    renders=db.clip_renders(clip_id)
+    try:
+        renders=db.clip_renders(clip_id)
+    except Exception:
+        renders=[]
     if not renders:
         return fallback
     available=[str(r.get("variant") or "") for r in renders]
@@ -95,7 +97,6 @@ def build_week_plan(platforms:list[str],start_epoch:float|None=None,days:int=7,m
     times=_local_slots(start_epoch,days,slots)
     if not times: times=[start_epoch+i*86400 for i in range(max(1,int(max_clips)))]
 
-    # Important: selection order is GLOBAL. Platform analytics do not reshuffle which clip is Monday vs Tuesday.
     candidates=_candidate_rows(); selected=[]; skipped=[]; last_event=""
     recent={p:_recent_rows(p,s.duplicate_window_days) for p in platforms}
 
