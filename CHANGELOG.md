@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0
+
+- Added Instagram Reels publishing through Meta's local resumable upload flow.
+- Added Instagram container status polling and delayed `media_publish` until processing finishes.
+- Added configurable Meta Graph API version, defaulting to `v26.0`.
+- Added local Instagram credential loading from environment variables or `secrets/instagram_token.json`.
+- Added automatic cover-frame selection based on OSRS event type.
+- Added generated JPEG cover previews for rendered variants.
+- TikTok automatically receives the selected `video_cover_timestamp_ms`.
+- Instagram automatically receives the selected `thumb_offset`.
+- YouTube can automatically upload the selected frame as a custom thumbnail.
+- Added weekly distribution planner for approved/favorite clips.
+- Planner automatically uses each clip's BEST render.
+- Added duplicate guards against recently queued/published clips.
+- Added transcript/title/hook similarity filtering to avoid repetitive posts.
+- Added event-type diversity so a weekly plan does not repeatedly schedule the same kind of OSRS moment when alternatives exist.
+- Added staggered platform offsets so cross-posts do not all fire at the same minute.
+- Added weekly plan preview and one-click Queue This Week workflow in the dashboard.
+- Added Instagram account readiness state to the publishing dashboard.
+- Added generated cover previews to the render editor.
+- Generated cover files are ignored by Git.
+
 ## 0.6.0
 
 - Added local publishing queue and scheduler.
@@ -15,7 +37,6 @@
 - Added published platform ID/URL tracking.
 - Added retry/remove controls in the dashboard.
 - Added `secrets/` and token files to `.gitignore`; OAuth credentials are never committed.
-- Added Instagram Reels as a clearly disabled/prepared adapter until a hosted public-video workflow and Meta account/app setup are configured.
 - Publishing remains opt-in: rendering a clip never posts it automatically.
 
 ## 0.5.0
