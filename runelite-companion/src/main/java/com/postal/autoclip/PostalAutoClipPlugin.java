@@ -18,6 +18,7 @@ import net.runelite.api.Hitsplat;
 import net.runelite.api.Player;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.InteractingChanged;
 import net.runelite.client.config.ConfigManager;
@@ -47,6 +48,7 @@ public class PostalAutoClipPlugin extends Plugin
     private Actor recentDamageTarget;
     private int recentDamageTick = Integer.MIN_VALUE;
     private int recentDamageAmount = 0;
+    private int lastHeartbeatTick = Integer.MIN_VALUE;
 
     private final ExecutorService sender = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "postal-autoclip-event");
@@ -62,6 +64,7 @@ public class PostalAutoClipPlugin extends Plugin
         recentDamageTarget = null;
         recentDamageTick = Integer.MIN_VALUE;
         recentDamageAmount = 0;
+        lastHeartbeatTick = Integer.MIN_VALUE;
         send("bridge_online", 1.0, "{\"message\":\"Postal AutoClip RuneLite companion online\"}");
     }
 
@@ -69,6 +72,17 @@ public class PostalAutoClipPlugin extends Plugin
     PostalAutoClipConfig provideConfig(ConfigManager configManager)
     {
         return configManager.getConfig(PostalAutoClipConfig.class);
+    }
+
+    @Subscribe
+    public void onGameTick(GameTick event)
+    {
+        int tick = client.getTickCount();
+        if (lastHeartbeatTick == Integer.MIN_VALUE || tick - lastHeartbeatTick >= 50)
+        {
+            lastHeartbeatTick = tick;
+            send("bridge_heartbeat", 1.0, "{\"message\":\"RuneLite companion active\"}");
+        }
     }
 
     @Subscribe
