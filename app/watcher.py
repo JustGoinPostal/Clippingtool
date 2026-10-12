@@ -6,6 +6,7 @@ from .media import VIDEO_EXTS
 from . import db
 from .pipeline import process_job
 from .analytics import maybe_refresh_analytics
+from .account_server import start_account_server
 
 _started=False
 
@@ -23,6 +24,7 @@ def start_watcher():
     global _started
     if _started: return
     _started=True
+    start_account_server()
     def loop():
         while True:
             try:
