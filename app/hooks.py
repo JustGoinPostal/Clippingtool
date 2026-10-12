@@ -42,6 +42,8 @@ def generate_hook(clip: dict) -> str:
         return "HE DID NOT EXPECT THAT"
     if event=="big_hit":
         return "THAT SPEC WAS DISGUSTING"
+    if event=="big_hit_taken":
+        return "THAT ALMOST ENDED THE RUN"
     if event in {"raid_reward","raid_complete"}:
         return "THE RAID ACTUALLY PAID"
     if event in {"drop","rare_drop","collection_log","loot","npc_loot"}:
