@@ -61,10 +61,10 @@ public sealed class MainForm : Form
 
         startButton.Text = "START AUTOCLIP"; startButton.SetBounds(24, 184, 244, 58); StylePrimary(startButton); startButton.Click += async (_, _) => await StartServerAsync(); left.Controls.Add(startButton);
         stopButton.Text = "STOP"; stopButton.SetBounds(282, 184, 110, 58); StyleButton(stopButton); stopButton.Click += (_, _) => StopServer(); left.Controls.Add(stopButton);
-        left.Controls.Add(MakeButton("Open Clips", 24, 255, 120, 40, (_, _) => OpenUrl("http://127.0.0.1:8787")));
-        left.Controls.Add(MakeButton("Analytics", 154, 255, 120, 40, (_, _) => OpenUrl("http://127.0.0.1:8787/static/analytics.html")));
-        left.Controls.Add(MakeButton("Secrets Folder", 284, 255, 130, 40, (_, _) => OpenFolder(SecretsPath)));
-        left.Controls.Add(MakeButton("Refresh", 424, 255, 109, 40, async (_, _) => await RefreshStatusAsync()));
+        left.Controls.Add(MakeButton("Open Clips", 24, 255, 110, 40, (_, _) => OpenUrl("http://127.0.0.1:8787")));
+        left.Controls.Add(MakeButton("Analytics", 144, 255, 110, 40, (_, _) => OpenUrl("http://127.0.0.1:8787/static/analytics.html")));
+        left.Controls.Add(MakeButton("Accounts", 264, 255, 110, 40, async (_, _) => await OpenAccountsAsync()));
+        left.Controls.Add(MakeButton("Secrets", 384, 255, 149, 40, (_, _) => OpenFolder(SecretsPath)));
 
         AddLabel(left, "Activity", 312);
         logBox.SetBounds(24, 338, 509, 154); logBox.Multiline = true; logBox.ReadOnly = true; logBox.ScrollBars = ScrollBars.Vertical; StyleText(logBox); left.Controls.Add(logBox);
@@ -74,7 +74,8 @@ public sealed class MainForm : Form
         AddStatus(right, "TikTok", tiktokState, 200); AddStatus(right, "Instagram", igState, 246); AddStatus(right, "RuneLite", rlState, 292);
         right.Controls.Add(MakeButton("Connect YouTube", 22, 350, 135, 38, async (_, _) => await PostLocalAsync("/api/publishing/youtube/connect")));
         right.Controls.Add(MakeButton("Connect Analytics", 168, 350, 140, 38, async (_, _) => await PostLocalAsync("/api/analytics/youtube/connect")));
-        right.Controls.Add(new Label { Left = 22, Top = 405, Width = 286, Height = 84, ForeColor = Color.Silver, Text = "TikTok and Instagram currently use token files in the local secrets folder. The launcher never uploads your credentials to GitHub." });
+        right.Controls.Add(MakeButton("TikTok / Instagram", 22, 400, 286, 38, async (_, _) => await OpenAccountsAsync()));
+        right.Controls.Add(new Label { Left = 22, Top = 450, Width = 286, Height = 55, ForeColor = Color.Silver, Text = "Account app keys and OAuth tokens stay local. Use Accounts to connect TikTok and Instagram through your browser." });
 
         FormClosing += (_, _) => StopServer();
         Load += async (_, _) => { EnsureConfig(); LoadObsFolder(); await RefreshStatusAsync(); timer.Start(); };
@@ -153,6 +154,23 @@ public sealed class MainForm : Form
         catch (Exception ex) { Log("START ERROR: " + ex.Message); }
     }
 
+    async Task OpenAccountsAsync()
+    {
+        if (!await IsServerUp()) await StartServerAsync();
+        if (!await IsServerUp()) return;
+        for (var i = 0; i < 10; i++)
+        {
+            try
+            {
+                using var r = await http.GetAsync("http://127.0.0.1:8790/status");
+                if (r.IsSuccessStatusCode) { OpenUrl("http://127.0.0.1:8790"); return; }
+            }
+            catch { }
+            await Task.Delay(250);
+        }
+        MessageBox.Show("The account manager did not start. Check the Activity log, then restart AutoClip.", "Postal AutoClip Accounts");
+    }
+
     void StopServer() { try { if (server is { HasExited: false }) { server.Kill(true); server.WaitForExit(3000); } } catch { } server = null; _ = RefreshStatusAsync(); }
 
     async Task RefreshStatusAsync()
@@ -160,8 +178,8 @@ public sealed class MainForm : Form
         var up = await IsServerUp(); SetState(serverState, up ? "RUNNING" : "STOPPED", up);
         var ready = File.Exists(VenvPython) && CommandExists("ffmpeg"); SetState(setupState, ready ? "READY" : "SETUP NEEDED", ready);
         var yt = File.Exists(Path.Combine(SecretsPath, "youtube_token.json")); SetState(ytState, yt ? "CONNECTED" : "NOT CONNECTED", yt);
-        var tt = File.Exists(Path.Combine(SecretsPath, "tiktok_token.json")); SetState(tiktokState, tt ? "TOKEN PRESENT" : "TOKEN NEEDED", tt);
-        var ig = File.Exists(Path.Combine(SecretsPath, "instagram_token.json")); SetState(igState, ig ? "TOKEN PRESENT" : "TOKEN NEEDED", ig);
+        var tt = File.Exists(Path.Combine(SecretsPath, "tiktok_token.json")); SetState(tiktokState, tt ? "CONNECTED" : "NOT CONNECTED", tt);
+        var ig = File.Exists(Path.Combine(SecretsPath, "instagram_token.json")); SetState(igState, ig ? "CONNECTED" : "NOT CONNECTED", ig);
         if (up)
         {
             try { var r = await http.GetAsync("http://127.0.0.1:8787/api/game-events/recent?limit=1"); var txt = await r.Content.ReadAsStringAsync(); SetState(rlState, txt.Trim() != "[]" ? "EVENTS SEEN" : "WAITING", null); }
