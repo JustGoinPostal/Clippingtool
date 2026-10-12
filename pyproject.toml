@@ -1,7 +1,7 @@
 [project]
 name = "postal-autoclip"
-version = "0.7.0"
-description = "Local-first automatic stream VOD clipper and social distribution tool for Shorts/Reels/TikTok"
+version = "0.8.0"
+description = "Local-first automatic stream VOD clipper, social distribution, and audience-learning tool for Shorts/Reels/TikTok"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "fastapi>=0.115",
