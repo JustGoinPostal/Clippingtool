@@ -8,7 +8,7 @@ from .config import ROOT, load_settings, save_settings
 from . import db
 from .watcher import scan_once, start_watcher
 from .pipeline import process_job, render_clip_id, render_all_variants
-from .learning import learned_profile
+from .learning import learned_profile, audience_profile
 from .hooks import generate_hook
 from .covers import ensure_cover
 from .distribution import build_week_plan, queue_week_plan
@@ -16,8 +16,9 @@ from .publishing import (
     platform_status, connect_youtube, tiktok_creator_info, queue_post,
     process_due_posts, start_publish_worker,
 )
+from .analytics import build_summary, collect_all, connect_youtube_analytics, youtube_analytics_status
 
-app=FastAPI(title="Postal AutoClip",version="0.7.0")
+app=FastAPI(title="Postal AutoClip",version="0.8.0")
 app.mount("/static",StaticFiles(directory=ROOT/"app"/"static"),name="static")
 
 @app.on_event("startup")
@@ -31,12 +32,13 @@ def home(): return (ROOT/"app"/"static"/"index.html").read_text(encoding="utf-8"
 @app.get("/api/status")
 def status():
     s=load_settings()
-    return {"ok":True,"version":"0.7.0","watch_folder":str(s.watch_path),"output_folder":str(s.output_path),
+    return {"ok":True,"version":"0.8.0","watch_folder":str(s.watch_path),"output_folder":str(s.output_path),
             "render_variants":s.render_variants,"primary_variant":s.primary_variant,"layout":s.layout,
             "auto_hook_enabled":s.auto_hook_enabled,"dynamic_zoom_enabled":s.dynamic_zoom_enabled,
             "quality_scoring_enabled":s.quality_scoring_enabled,"best_variant_auto_select":s.best_variant_auto_select,
             "publishing_enabled":s.publishing_enabled,"auto_cover_enabled":s.auto_cover_enabled,
-            "distribution_slots":s.distribution_slots}
+            "distribution_slots":s.distribution_slots,"analytics_enabled":s.analytics_enabled,
+            "analytics_refresh_hours":s.analytics_refresh_hours}
 
 @app.get("/api/jobs")
 def jobs(): return db.q("SELECT * FROM jobs ORDER BY id DESC LIMIT 100")
@@ -131,7 +133,8 @@ def decision(clip_id:int,payload:dict=Body(...)):
 @app.get("/api/profile")
 def profile():
     counts=db.q("SELECT status,COUNT(*) n FROM feedback GROUP BY status")
-    return {"weights":learned_profile(),"feedback":{x["status"]:x["n"] for x in counts}}
+    return {"weights":learned_profile(),"audience_weights":audience_profile(),
+            "feedback":{x["status"]:x["n"] for x in counts}}
 
 @app.post("/api/game-events")
 def game_event(payload:dict=Body(...)):
@@ -161,7 +164,6 @@ def game_events_recent(limit:int=25):
     return db.q("SELECT id,event_time,event_type,confidence,payload_json,source,created_at FROM game_events ORDER BY id DESC LIMIT ?",
                 (max(1,min(250,limit)),))
 
-# -------------------- publishing --------------------
 def _default_privacy(platform:str) -> str:
     s=load_settings()
     if platform=="youtube": return s.youtube_default_privacy
@@ -234,11 +236,10 @@ def publishing_queue_retry(job_id:int):
 def publishing_run_due():
     threading.Thread(target=process_due_posts,daemon=True).start(); return {"started":True}
 
-# -------------------- v0.7 distribution planner --------------------
 @app.post("/api/distribution/plan")
 def distribution_plan(payload:dict=Body(default={})):
     try:
-        return build_week_plan(platforms=payload.get("platforms") or ["youtube"],
+        return build_week_plan(platforms=payload.get("platforms") or ["youtube","tiktok","instagram"],
             start_epoch=float(payload.get("start_epoch") or time.time()),days=int(payload.get("days") or 7),
             max_clips=int(payload.get("max_clips") or 5),slots=payload.get("slots") if isinstance(payload.get("slots"),list) else None)
     except Exception as e: raise HTTPException(400,f"{type(e).__name__}: {e}")
@@ -246,11 +247,35 @@ def distribution_plan(payload:dict=Body(default={})):
 @app.post("/api/distribution/queue")
 def distribution_queue(payload:dict=Body(default={})):
     try:
-        result=build_week_plan(platforms=payload.get("platforms") or ["youtube"],
+        result=build_week_plan(platforms=payload.get("platforms") or ["youtube","tiktok","instagram"],
             start_epoch=float(payload.get("start_epoch") or time.time()),days=int(payload.get("days") or 7),
             max_clips=int(payload.get("max_clips") or 5),slots=payload.get("slots") if isinstance(payload.get("slots"),list) else None)
         ids=queue_week_plan(result["plan"]); result["publish_job_ids"]=ids; result["queued_count"]=len(ids); return result
     except Exception as e: raise HTTPException(400,f"{type(e).__name__}: {e}")
+
+@app.get("/api/analytics")
+def analytics_summary():
+    try: return build_summary()
+    except Exception as e: raise HTTPException(500,f"{type(e).__name__}: {e}")
+
+@app.post("/api/analytics/refresh")
+def analytics_refresh():
+    def task():
+        try: collect_all(force=True)
+        except Exception as e: print(f"Analytics refresh failed: {e}")
+    threading.Thread(target=task,daemon=True,name="analytics-refresh").start()
+    return {"started":True}
+
+@app.get("/api/analytics/youtube/status")
+def analytics_youtube_status(): return youtube_analytics_status()
+
+@app.post("/api/analytics/youtube/connect")
+def analytics_youtube_connect():
+    def task():
+        try: connect_youtube_analytics()
+        except Exception as e: print(f"YouTube analytics OAuth failed: {e}")
+    threading.Thread(target=task,daemon=True,name="youtube-analytics-oauth").start()
+    return {"started":True,"message":"YouTube analytics OAuth browser flow started on this PC."}
 
 @app.get("/api/settings")
 def settings(): return load_settings().model_dump()
