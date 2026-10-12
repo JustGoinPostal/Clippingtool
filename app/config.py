@@ -59,6 +59,12 @@ class Settings(BaseModel):
     quality_scoring_enabled: bool = True
     best_variant_auto_select: bool = True
 
+    # v0.6 publishing queue
+    publishing_enabled: bool = True
+    publish_poll_seconds: int = 20
+    youtube_default_privacy: str = "private"
+    tiktok_default_privacy: str = "SELF_ONLY"
+
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = ""
     runelite_bridge_enabled: bool = True
@@ -85,6 +91,7 @@ def load_settings() -> Settings:
     s = Settings.model_validate(data)
     for p in (s.watch_path, s.output_path, s.cache_path):
         p.mkdir(parents=True, exist_ok=True)
+    (ROOT / "secrets").mkdir(parents=True, exist_ok=True)
     return s
 
 def save_settings(data: dict[str, Any]) -> Settings:
