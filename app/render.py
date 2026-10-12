@@ -66,7 +66,30 @@ def _focus_crop(mode: str) -> str:
         return "crop=iw*0.34:ih*0.86:iw*0.66:ih*0.04"
     return "crop=iw*0.66:ih*0.72:iw*0.08:ih*0.06"
 
-def _osrs_focus_filter(clip: dict, ass_path: str, s: Settings) -> str:
+def _payoff_ratio(mode: str) -> float:
+    if mode=="combat": return 0.60
+    if mode=="chat": return 0.52
+    if mode=="ui": return 0.55
+    return 0.58
+
+def _focus_chain(mode: str, panel_w: int, panel_h: int, duration: float, s: Settings) -> str:
+    crop=_focus_crop(mode)
+    base=(f"{crop},scale={panel_w}:{panel_h}:force_original_aspect_ratio=increase,"
+          f"crop={panel_w}:{panel_h}")
+    if not s.dynamic_zoom_enabled or duration < 2.0:
+        return base
+    fps=30.0
+    pulse=max(0.8,min(float(s.dynamic_zoom_seconds),duration*0.55))
+    mid=duration*_payoff_ratio(mode)
+    a=max(0.0,mid-pulse/2); b=min(duration,mid+pulse/2)
+    mid=(a+b)/2; half=max(0.25,(b-a)/2)
+    sf=int(round(a*fps)); ef=int(round(b*fps)); mf=int(round(mid*fps)); hf=max(1,int(round(half*fps)))
+    strength=max(0.0,min(0.35,float(s.dynamic_zoom_strength)))
+    z=f"1+{strength:.4f}*if(between(on,{sf},{ef}),max(0,1-abs(on-{mf})/{hf}),0)"
+    return (base+f",fps=30,zoompan=z='{z}':x='iw/2-(iw/zoom/2)':"
+                 f"y='ih/2-(ih/zoom/2)':d=1:s={panel_w}x{panel_h}:fps=30")
+
+def _osrs_focus_filter(clip: dict, ass_path: str, s: Settings, duration: float) -> str:
     rw,rh=int(s.render_width),int(s.render_height)
     margin=max(20,int(s.osrs_focus_margin))
     panel_h=max(420,min(int(s.osrs_focus_panel_height),rh-850))
@@ -74,13 +97,13 @@ def _osrs_focus_filter(clip: dict, ass_path: str, s: Settings) -> str:
     full_w=rw-margin*2
     full_y=70
     focus_y=735
-    crop=_focus_crop(focus_mode(clip))
+    mode=focus_mode(clip)
+    focus_chain=_focus_chain(mode,panel_w,panel_h,duration,s)
     return (
         f"[0:v]split=3[bg][full][focus];"
         f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},gblur=sigma=30[bg2];"
         f"[full]scale={full_w}:-2:force_original_aspect_ratio=decrease[full2];"
-        f"[focus]{crop},scale={panel_w}:{panel_h}:force_original_aspect_ratio=increase,"
-        f"crop={panel_w}:{panel_h},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.72:t=4[focus2];"
+        f"[focus]{focus_chain},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.72:t=4[focus2];"
         f"[bg2][full2]overlay=(W-w)/2:{full_y}[stage1];"
         f"[stage1][focus2]overlay=(W-w)/2:{focus_y},ass='{ass_path}'[v]"
     )
@@ -95,7 +118,8 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
     dur=max(0.2,end-start)
 
     ass=output.with_suffix(".ass")
-    write_ass(words,start,end,ass,s)
+    hook_text=str(clip.get("hook_text") or "") if s.auto_hook_enabled else ""
+    write_ass(words,start,end,ass,s,hook_text=hook_text)
     ap=_ffmpeg_filter_path(ass)
 
     if s.layout=="center_crop":
@@ -104,7 +128,7 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
         cmd=["ffmpeg","-hide_banner","-loglevel","warning","-y","-ss",str(start),"-i",str(source),
              "-t",str(dur),"-vf",vf]
     elif s.layout=="osrs_focus":
-        fc=_osrs_focus_filter(clip,ap,s)
+        fc=_osrs_focus_filter(clip,ap,s,dur)
         cmd=["ffmpeg","-hide_banner","-loglevel","warning","-y","-ss",str(start),"-i",str(source),
              "-t",str(dur),"-filter_complex",fc,"-map","[v]","-map","0:a?"]
     else:
@@ -121,4 +145,6 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
     if progress:
         progress(f"Rendering {variant} vertical clip")
     subprocess.run(cmd,check=True)
-    return {"path":output,"variant":variant,"start":start,"end":end,"duration":dur,"focus":focus_mode(clip)}
+    return {"path":output,"variant":variant,"start":start,"end":end,"duration":dur,
+            "focus":focus_mode(clip),"hook_text":hook_text,
+            "dynamic_zoom":bool(s.dynamic_zoom_enabled and s.layout=="osrs_focus")}
