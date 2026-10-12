@@ -5,6 +5,7 @@ from .config import load_settings
 from .media import VIDEO_EXTS
 from . import db
 from .pipeline import process_job
+from .analytics import maybe_refresh_analytics
 
 _started=False
 
@@ -25,7 +26,8 @@ def start_watcher():
     def loop():
         while True:
             try:
-                s=load_settings(); scan_once(auto=True); time.sleep(max(10,s.poll_seconds))
+                s=load_settings(); scan_once(auto=True); maybe_refresh_analytics(force=False)
+                time.sleep(max(10,s.poll_seconds))
             except Exception:
                 time.sleep(30)
     threading.Thread(target=loop,daemon=True,name="PostalAutoClipWatcher").start()
