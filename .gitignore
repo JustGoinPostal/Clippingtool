@@ -8,6 +8,7 @@ secrets/
 data/input/*
 data/output/*
 data/cache/*
+data/covers/*
 data/*.db
 !data/input/.gitkeep
 !data/output/.gitkeep
