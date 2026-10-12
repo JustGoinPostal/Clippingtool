@@ -18,7 +18,8 @@ def _esc(text: str):
 def _token(text: str):
     return "".join(c.lower() for c in text if c.isalnum() or c in {"'"})
 
-def write_ass(words: list[dict], clip_start: float, clip_end: float, out: Path, s: Settings):
+def write_ass(words: list[dict], clip_start: float, clip_end: float, out: Path, s: Settings,
+              hook_text: str=""):
     relevant=[]
     for w in words:
         if float(w["end"]) < clip_start or float(w["start"]) > clip_end:
@@ -38,6 +39,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{s.caption_font},{s.caption_font_size},&H00FFFFFF,&H0000F2FF,&H00101010,&H74000000,-1,0,0,0,100,100,0,0,1,6,3,2,72,72,{s.caption_margin_v},1
+Style: Hook,{s.caption_font},{s.hook_font_size},&H00FFFFFF,&H0000FFFF,&H00101010,&H90000000,-1,0,0,0,100,100,0,0,1,7,3,8,85,85,{s.hook_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -45,6 +47,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     lines=[]; group=[]
     max_words=max(2,int(s.caption_words_per_group))
     emph_scale=max(100,int(s.caption_emphasis_scale))
+
+    if s.auto_hook_enabled and (hook_text or "").strip():
+        hook=_esc((hook_text or "").strip().upper()[:72])
+        hook_end=min(max(0.8,float(s.hook_duration_seconds)),max(0.8,clip_end-clip_start))
+        anim="{\\fad(80,160)\\fscx112\\fscy112\\t(0,180,\\fscx100\\fscy100)}"
+        lines.append(
+            f"Dialogue: 2,{_ass_time(0)},{_ass_time(hook_end)},Hook,,0,0,0,,{anim}{hook}"
+        )
 
     def flush(g):
         if not g: return
