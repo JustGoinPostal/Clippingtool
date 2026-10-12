@@ -81,6 +81,30 @@ def init_db():
           FOREIGN KEY(clip_id) REFERENCES clips(id)
         );
         CREATE INDEX IF NOT EXISTS idx_renders_clip ON renders(clip_id);
+        CREATE TABLE IF NOT EXISTS publish_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          clip_id INTEGER NOT NULL,
+          render_id INTEGER NOT NULL,
+          platform TEXT NOT NULL,
+          scheduled_for REAL NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          title TEXT NOT NULL DEFAULT '',
+          caption TEXT NOT NULL DEFAULT '',
+          hashtags TEXT NOT NULL DEFAULT '',
+          privacy TEXT NOT NULL DEFAULT 'private',
+          options_json TEXT NOT NULL DEFAULT '{}',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          error TEXT NOT NULL DEFAULT '',
+          platform_post_id TEXT NOT NULL DEFAULT '',
+          platform_url TEXT NOT NULL DEFAULT '',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          published_at REAL NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(clip_id) REFERENCES clips(id),
+          FOREIGN KEY(render_id) REFERENCES renders(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_publish_due ON publish_queue(status,scheduled_for);
         """)
         _ensure_column(c,"clips","event_type","TEXT NOT NULL DEFAULT 'speech'")
         _ensure_column(c,"clips","features_json","TEXT NOT NULL DEFAULT '{}'")
@@ -125,6 +149,7 @@ def replace_clips(job_id: int, clips: list[dict[str, Any]]):
         old_ids=[r[0] for r in c.execute("SELECT id FROM clips WHERE job_id=?",(job_id,)).fetchall()]
         if old_ids:
             c.executemany("DELETE FROM renders WHERE clip_id=?",[(x,) for x in old_ids])
+            c.executemany("DELETE FROM publish_queue WHERE clip_id=?",[(x,) for x in old_ids])
         c.execute("DELETE FROM clips WHERE job_id=?",(job_id,))
         for x in clips:
             c.execute("""INSERT INTO clips(job_id,start,end,score,reason,transcript,title,description,hashtags,
@@ -183,3 +208,30 @@ def choose_best_render(clip_id: int):
 
 def clip_renders(clip_id: int):
     return q("SELECT * FROM renders WHERE clip_id=? ORDER BY is_best DESC,quality_score DESC,id",(clip_id,))
+
+def add_publish_job(clip_id: int, render_id: int, platform: str, scheduled_for: float,
+                    title: str="", caption: str="", hashtags: str="", privacy: str="private",
+                    options: dict|None=None) -> int:
+    return exec_sql("""INSERT INTO publish_queue(clip_id,render_id,platform,scheduled_for,title,caption,hashtags,privacy,options_json)
+                       VALUES(?,?,?,?,?,?,?,?,?)""",
+                    (int(clip_id),int(render_id),str(platform),float(scheduled_for),str(title),str(caption),
+                     str(hashtags),str(privacy),json.dumps(options or {},separators=(",",":"))))
+
+def update_publish_job(job_id: int, **fields):
+    allowed={"scheduled_for","status","title","caption","hashtags","privacy","options_json","attempts","error",
+             "platform_post_id","platform_url","result_json","published_at"}
+    sets=[]; vals=[]
+    for key,value in fields.items():
+        if key not in allowed: continue
+        sets.append(f"{key}=?"); vals.append(value)
+    if not sets: return
+    sets.append("updated_at=CURRENT_TIMESTAMP")
+    vals.append(int(job_id))
+    exec_sql(f"UPDATE publish_queue SET {', '.join(sets)} WHERE id=?",vals)
+
+def publish_jobs(limit: int=100):
+    return q("""SELECT publish_queue.*,renders.variant,renders.quality_score,renders.is_best,renders.output_path,
+                clips.title AS clip_title,clips.description AS clip_description,clips.hashtags AS clip_hashtags
+                FROM publish_queue JOIN renders ON renders.id=publish_queue.render_id
+                JOIN clips ON clips.id=publish_queue.clip_id
+                ORDER BY scheduled_for DESC,id DESC LIMIT ?""",(max(1,min(500,int(limit))),))
