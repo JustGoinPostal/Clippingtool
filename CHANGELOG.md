@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0
+
+- Added automatic deterministic opening hooks for every candidate clip.
+- Added hook editing and one-click hook regeneration in the dashboard.
+- Added timed hook overlays to the rendered Short.
+- Added event-aware dynamic payoff zoom pulses for OSRS focus renders.
+- Added local post-render quality scoring for hook, pacing, length fit, payoff, context, dead air, and focus.
+- Added separate quality scores for Short (22s), Medium (38s), and Long (58s) versions.
+- Added automatic best-variant selection; the highest-scoring render becomes the clip's primary output.
+- Added BEST badges and quality breakdowns in the browser editor.
+- Editing timing or hook text now invalidates stale render records.
+- All v0.5 scoring and hook generation remain local/free with no cloud API requirement.
+
 ## 0.4.0
 
 - Added browser-based source-VOD clip editor.
