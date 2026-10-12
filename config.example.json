@@ -41,6 +41,10 @@
   "dynamic_zoom_seconds": 2.6,
   "quality_scoring_enabled": true,
   "best_variant_auto_select": true,
+  "publishing_enabled": true,
+  "publish_poll_seconds": 20,
+  "youtube_default_privacy": "private",
+  "tiktok_default_privacy": "SELF_ONLY",
   "ollama_url": "http://127.0.0.1:11434",
   "ollama_model": "",
   "keywords": {
