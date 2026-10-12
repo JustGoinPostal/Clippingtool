@@ -14,10 +14,10 @@ from .ranker import local_ai_second_pass
 from .media_time import recording_start_epoch
 from .osrs_events import map_events_to_recording
 
-
 def _key(path: Path):
-    st=path.stat(); raw=f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}".encode(); return hashlib.sha1(raw).hexdigest()[:16]
-
+    st=path.stat()
+    raw=f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}".encode()
+    return hashlib.sha1(raw).hexdigest()[:16]
 
 def process_job(job_id: int):
     s=load_settings(); job=db.q("SELECT * FROM jobs WHERE id=?",(job_id,),one=True)
@@ -50,7 +50,10 @@ def process_job(job_id: int):
             start_epoch,start_source=recording_start_epoch(path,d)
             raw_events=db.game_events_between(start_epoch-8,start_epoch+d+8)
             game_events=map_events_to_recording(raw_events,start_epoch,d)
-            (cache/"runelite_events.json").write_text(json.dumps({"recording_start_epoch":start_epoch,"source":start_source,"events":game_events},indent=2),encoding="utf-8")
+            (cache/"runelite_events.json").write_text(
+                json.dumps({"recording_start_epoch":start_epoch,"source":start_source,"events":game_events},indent=2),
+                encoding="utf-8"
+            )
         msg("Learning your clip preferences",0.70)
         profile=learned_profile()
         msg("Scoring OSRS moments and de-duplicating",0.78)
@@ -61,22 +64,41 @@ def process_job(job_id: int):
             c["title"],c["description"],c["hashtags"]=make_metadata(c)
             if c.get("ai_title"): c["title"]=c["ai_title"]
         db.replace_clips(job_id,candidates)
-        db.update_job(job_id,status="ready",progress=1.0,message=f"Found {len(candidates)} diverse candidate clips")
+        db.update_job(job_id,status="ready",progress=1.0,
+                      message=f"Found {len(candidates)} diverse candidate clips")
     except Exception as e:
         db.update_job(job_id,status="error",message=f"{type(e).__name__}: {e}")
         (s.cache_path/f"job_{job_id}_error.txt").write_text(traceback.format_exc(),encoding="utf-8")
 
-
-def render_clip_id(clip_id: int):
-    s=load_settings(); clip=db.q("SELECT * FROM clips WHERE id=?",(clip_id,),one=True)
+def render_clip_id(clip_id: int, variant: str|None=None):
+    s=load_settings()
+    variant=variant or s.primary_variant
+    if variant not in s.render_variants:
+        raise ValueError(f"Unknown render variant: {variant}")
+    clip=db.q("SELECT * FROM clips WHERE id=?",(clip_id,),one=True)
     if not clip: raise KeyError(clip_id)
-    job=db.q("SELECT * FROM jobs WHERE id=?",(clip["job_id"],),one=True); source=Path(job["source_path"])
-    key=_key(source); tx=json.loads((s.cache_path/key/"transcript.json").read_text(encoding="utf-8"))
+    job=db.q("SELECT * FROM jobs WHERE id=?",(clip["job_id"],),one=True)
+    source=Path(job["source_path"])
+    key=_key(source)
+    tx=json.loads((s.cache_path/key/"transcript.json").read_text(encoding="utf-8"))
     safe="".join(c if c.isalnum() or c in "-_" else "_" for c in clip["title"][:45]).strip("_") or f"clip_{clip_id}"
-    out=s.output_path/f"{clip_id:04d}_{safe}.mp4"
+    out=s.output_path/f"{clip_id:04d}_{variant}_{safe}.mp4"
     db.exec_sql("UPDATE clips SET status='rendering' WHERE id=?",(clip_id,))
     try:
-        render_clip(source,clip,tx.get("words",[]),out,s)
-        db.exec_sql("UPDATE clips SET status='rendered', output_path=? WHERE id=?",(str(out),clip_id))
+        result=render_clip(source,clip,tx.get("words",[]),out,s,variant=variant)
+        db.upsert_render(clip_id,variant,str(out),result["start"],result["end"],result["focus"])
+        if variant==s.primary_variant or not clip.get("output_path"):
+            db.exec_sql("UPDATE clips SET status='rendered', output_path=? WHERE id=?",(str(out),clip_id))
+        else:
+            db.exec_sql("UPDATE clips SET status='rendered' WHERE id=?",(clip_id,))
+        return result
     except Exception:
-        db.exec_sql("UPDATE clips SET status='error' WHERE id=?",(clip_id,)); raise
+        db.exec_sql("UPDATE clips SET status='error' WHERE id=?",(clip_id,))
+        raise
+
+def render_all_variants(clip_id: int):
+    s=load_settings()
+    results=[]
+    for variant in s.render_variants:
+        results.append(render_clip_id(clip_id,variant))
+    return results
