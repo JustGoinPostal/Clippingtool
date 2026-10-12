@@ -1,37 +1,38 @@
-# Postal AutoClip v0.7
+# Postal AutoClip v0.8
 
-Postal AutoClip is a clean-room, local-first automatic VOD clipper and social distribution tool tuned for OSRS and RuneLite. It watches OBS recordings, transcribes locally, detects important moments, learns from Keep/Great/Reject decisions, renders multiple 9:16 versions, picks the best one, generates a cover frame, and can schedule/publish approved clips to YouTube, TikTok, and Instagram Reels.
+Postal AutoClip is a clean-room, local-first OSRS/RuneLite stream clipping and social-distribution tool. It can watch OBS recordings, detect moments, learn from Keep/Great/Reject decisions, render multiple vertical versions, pick the BEST edit, generate covers, cross-post the same strong clip to YouTube Shorts, TikTok and Instagram Reels, and now learn from real audience performance.
 
 No facecam is required.
 
-## v0.7 highlights
+## v0.8 strategy
 
-- Instagram Reels publishing through Meta's resumable local-file upload flow.
-- Automatic Instagram processing-status polling before `media_publish`.
-- Automatic cover-frame selection for each rendered clip.
-- TikTok uses the selected cover timestamp.
-- Instagram uses the selected `thumb_offset`.
-- YouTube can upload the extracted cover frame as a custom thumbnail.
-- Weekly distribution planner for Keep/Great clips.
-- Planner always prefers the clip's BEST rendered variant.
-- Duplicate guard against already queued/published clips.
-- Similarity guard using title + hook + transcript text.
-- Event diversity so a week is less likely to become five nearly identical PvP/drop clips when alternatives exist.
-- Platform staggering so YouTube/TikTok/Instagram cross-posts do not all fire at the same minute.
-- Weekly preview before anything is queued.
-- One-click **Queue This Week** after reviewing the plan.
-- Generated cover previews in the browser editor.
+The default marketing model is now **one strong moment -> all selected platforms**. Cross-posting the same original clip is not treated as duplication. The duplicate guard is platform-aware, so a clip already posted to YouTube can still be scheduled to TikTok and Instagram.
+
+Platform-specific packaging can still differ: title/caption, hashtags, privacy, cover treatment and schedule. The underlying clean master clip stays the same.
+
+## v0.8 highlights
+
+- Audience analytics collectors for YouTube, TikTok and Instagram.
+- YouTube metrics can include views, engaged views, likes, comments, shares, average view duration, average view percentage and subscribers gained.
+- TikTok owned-video metrics use `video.list` and include views, likes, comments and shares when a public post ID is available.
+- Instagram Reel insights are requested defensively one metric at a time so one unsupported/deprecated metric does not break the whole collector.
+- Local analytics history stored in SQLite.
+- Cross-platform performance score from views, weighted engagement and retention where available.
+- Once there is enough history, performance is partly normalized against your own results on that platform.
+- Audience-performance signals blend into future clip ranking instead of replacing your explicit Keep/Great/Reject preferences.
+- Analytics do not influence ranking until a post is old enough and has enough views.
+- Automatic background analytics refresh while Postal AutoClip is running.
+- New local analytics dashboard at `http://127.0.0.1:8787/static/analytics.html`.
+- Manual analytics refresh and YouTube-analytics OAuth helper scripts.
+- Distribution API now defaults to YouTube + TikTok + Instagram when platforms are not explicitly supplied.
 
 ## Full pipeline
 
-`OBS recording + optional RuneLite events -> audio/video/Whisper analysis -> candidate scoring -> preference learning -> hook -> editor -> 22s/38s/58s renders -> quality scoring -> BEST render -> cover frame -> weekly planner -> YouTube/TikTok/Instagram queue`
+`OBS + optional RuneLite events -> audio/video/Whisper analysis -> candidate scoring -> taste + audience learning -> hook/editor -> 22s/38s/58s renders -> BEST render -> cover -> cross-platform weekly plan -> YouTube/TikTok/Instagram -> analytics -> better future ranking`
 
-## Install on Windows
+## Install
 
-1. Install Python 3.11 or 3.12.
-2. Clone or download this repository.
-3. Open PowerShell in the project folder.
-4. Run:
+Use Python 3.11 or 3.12 on Windows.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -39,240 +40,101 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\launch.ps1
 ```
 
-Dashboard:
+Main dashboard:
 
-```text
-http://127.0.0.1:8787
-```
+`http://127.0.0.1:8787`
 
-The installer installs project dependencies and attempts to install FFmpeg through `winget` if it is missing.
+Analytics dashboard:
 
-## Normal workflow
+`http://127.0.0.1:8787/static/analytics.html`
 
-1. Point `watch_folder` in `config.json` at your OBS recordings.
-2. Finish a stream or manually analyze a recording.
-3. Review detected candidates.
-4. Use **Keep**, **Great**, or **Reject** to teach the local preference model.
-5. Edit timing/hook text if needed.
-6. Click **Render All**.
-7. Postal AutoClip creates 22s, 38s, and 58s versions and marks one **BEST**.
-8. Approve several clips.
-9. Open the **Weekly distribution planner**.
-10. Select YouTube / TikTok / Instagram, preview the week, then click **Queue This Week**.
-11. Postal AutoClip publishes due jobs while it is running.
+## YouTube publishing and analytics
 
-## Automatic cover selection
+Publishing still uses your local Google Desktop OAuth client at:
 
-Every render gets an event-aware cover timestamp. Combat moments bias toward the likely KO/payoff area; raid/drop moments bias slightly later toward the reward reveal; reactions bias earlier.
+`secrets/youtube_client_secret.json`
 
-The dashboard generates a JPEG preview on demand at:
+Connect normal YouTube publishing from the main dashboard. v0.8 uses a separate read-only analytics token so analytics permissions do not need to be mixed into the upload token.
 
-```text
-data/covers/
-```
-
-Those files are generated locally and ignored by Git.
-
-With `youtube_set_thumbnail=true`, Postal AutoClip attempts to upload that JPEG with YouTube's thumbnail API after the video upload. A thumbnail failure does not fail the video upload itself.
-
-## Weekly planner
-
-Defaults:
-
-```json
-{
-  "duplicate_window_days": 30,
-  "duplicate_similarity_threshold": 0.62,
-  "distribution_slots": ["12:00", "18:30"],
-  "platform_offsets_minutes": {
-    "youtube": 0,
-    "tiktok": 20,
-    "instagram": 40
-  }
-}
-```
-
-The planner only uses clips marked **Keep** or **Great** that already have a rendered version. It prefers favorites, render quality score, and candidate score.
-
-It filters:
-
-- the exact same clip if it was recently queued/published on a selected platform;
-- highly similar title/hook/transcript combinations;
-- duplicate-like clips inside the new plan itself;
-- repeated event types when a different eligible event is available.
-
-The same approved clip may still be cross-posted to multiple selected platforms; the duplicate guard is platform-aware.
-
-## YouTube setup
-
-Postal AutoClip uses Google's OAuth flow and `youtube.upload` scope.
-
-1. Create/select a Google Cloud project.
-2. Enable **YouTube Data API v3**.
-3. Configure the OAuth consent screen.
-4. Create an OAuth client of type **Desktop app**.
-5. Download the client JSON.
-6. Save it as:
-
-```text
-secrets/youtube_client_secret.json
-```
-
-7. Start Postal AutoClip.
-8. Click **Connect YouTube**.
-9. Complete authorization in the browser.
-
-The refresh token is stored locally at:
-
-```text
-secrets/youtube_token.json
-```
-
-Both files are ignored by Git.
-
-## TikTok setup
-
-TikTok posting requires a TikTok for Developers app with Content Posting API access and a user token authorized for `video.publish`.
-
-Either set:
+Run once:
 
 ```powershell
-$env:POSTAL_TIKTOK_ACCESS_TOKEN="your-access-token"
+.\connect_analytics.ps1
 ```
 
-or create:
+This requests read-only YouTube/YouTube Analytics permissions and stores the resulting local token under `secrets/`.
 
-```text
-secrets/tiktok_token.json
-```
-
-with:
-
-```json
-{
-  "access_token": "your-access-token"
-}
-```
-
-Postal AutoClip queries creator info before posting so it can use the account's currently permitted privacy values. Local MP4s use TikTok `FILE_UPLOAD`, then the queue remains `submitted` until TikTok reports completion.
-
-## Instagram Reels setup
-
-v0.7 can upload the local rendered MP4 directly to Meta using the Instagram Reels resumable upload flow; a public CDN URL is not required for this mode.
-
-Create:
-
-```text
-secrets/instagram_token.json
-```
-
-with:
-
-```json
-{
-  "access_token": "your-meta-access-token",
-  "ig_user_id": "your-instagram-user-id"
-}
-```
-
-You can alternatively set:
+To pull metrics immediately:
 
 ```powershell
-$env:POSTAL_INSTAGRAM_ACCESS_TOKEN="your-meta-access-token"
-$env:POSTAL_INSTAGRAM_USER_ID="your-instagram-user-id"
+.\refresh_analytics.ps1
 ```
 
-The Instagram account/app must be eligible for Instagram content publishing and have the required Meta permissions/account relationship. v0.7 defaults to Graph API `v26.0`:
+## TikTok analytics
+
+The TikTok access token used for analytics needs the `video.list` scope in addition to the scopes required for publishing. Postal AutoClip queries owned videos for view, like, comment and share counts.
+
+For posts created through the Content Posting API, TikTok may initially give Postal AutoClip a `publish_id`. v0.8 reads the public post ID from TikTok's publish-status result when it is available. If no safely matchable public post ID exists, the collector records a note instead of guessing which TikTok belongs to the clip.
+
+## Instagram analytics
+
+Postal AutoClip reuses the Instagram credential setup from v0.7 (`secrets/instagram_token.json`). It reads Reel insights using the configured Graph API version. Because Meta changes which metrics are valid by media type/version, v0.8 requests metrics independently and keeps whatever the connected account currently supports.
+
+## Audience-learning guardrails
+
+Default settings:
 
 ```json
-"instagram_graph_version": "v26.0"
+{
+  "analytics_enabled": true,
+  "analytics_refresh_hours": 6.0,
+  "analytics_history_days": 90,
+  "analytics_collection_min_age_hours": 6.0,
+  "analytics_learning_enabled": true,
+  "analytics_learning_weight": 0.35,
+  "analytics_learning_min_age_hours": 24.0,
+  "analytics_learning_min_views": 100
+}
 ```
 
-The upload lifecycle is:
+A newly published clip can be measured after the collection minimum, but it does not train future ranking until it is at least 24 hours old and has at least 100 views by default. Audience learning is bounded so one viral outlier cannot completely override your explicit feedback.
 
-`create REELS container with upload_type=resumable -> upload local MP4 to rupload.facebook.com -> poll status_code -> media_publish -> fetch permalink`
+## Cross-platform distribution
 
-Instagram jobs therefore use the same `submitted` state as TikTok while platform-side processing is incomplete.
+Recommended default workflow:
 
-## Publishing queue states
+1. Stream normally.
+2. Let AutoClip detect candidates.
+3. Mark the genuinely good moments Keep/Great.
+4. Render All and let it choose BEST.
+5. Preview the weekly plan.
+6. Cross-post the same approved moment to YouTube, TikTok and Instagram.
+7. Let each platform use native packaging/cover metadata.
+8. Let v0.8 collect results and gradually improve ranking.
 
-- `queued` — waiting for scheduled time;
-- `publishing` — local upload/API call is running;
-- `submitted` — platform accepted the upload but is still processing it;
-- `published` — platform completed publication;
-- `failed` — publication failed after retries or platform processing returned an error.
+This means five strong weekly moments can become fifteen native distribution posts without requiring fifteen different videos.
 
-Queued jobs survive restarts because queue state lives in SQLite.
+## Existing capabilities
 
-Rendering alone never posts anything. Posts enter the publisher only after you explicitly queue them or commit a weekly plan.
+- Camera-free OSRS visual/audio/transcript detection.
+- Optional RuneLite exact-event bridge.
+- Rare-drop, PvP, raid, big-hit and reaction-oriented ranking.
+- Local Whisper transcription.
+- Optional local Ollama second pass.
+- Editable timing and hooks.
+- Animated captions and OSRS-aware reframing.
+- 22s / 38s / 58s variants and automatic BEST selection.
+- Automatic cover-frame extraction.
+- YouTube Shorts publishing.
+- TikTok Content Posting API support.
+- Instagram Reels resumable publishing.
+- Local scheduling and retry queue.
+- Weekly cross-platform distribution planner.
+- Platform-aware duplicate/repetition protection.
 
-## Editing and rendering
+## Privacy
 
-The browser editor supports:
-
-- source-VOD scrubbing;
-- exact start/end adjustment;
-- hook editing/regeneration;
-- 22s / 38s / 58s renders;
-- quality score comparison;
-- BEST variant selection;
-- generated cover preview.
-
-The default OSRS layout keeps the full RuneLite frame visible while adding a second focus area for combat, reward/chat, UI, or general gameplay.
-
-## RuneLite companion
-
-The optional companion source lives under:
-
-```text
-runelite-companion/
-```
-
-It can send exact timestamps for loot, PK/player loot, collection-log messages, deaths, big hits, and selected game messages to:
-
-```text
-http://127.0.0.1:8787/api/game-events
-```
-
-The clipper still works without the companion by using audio, transcript, and video analysis.
-
-## Optional Ollama second pass
-
-Set an installed local model in `config.json`:
-
-```json
-"ollama_model": "your-local-model-name"
-```
-
-This is optional. Core clipping, editing, scoring, covers, scheduling, and distribution do not require a paid AI API.
-
-## Local data
-
-Rendered videos:
-
-```text
-data/output/
-```
-
-Cover frames:
-
-```text
-data/covers/
-```
-
-SQLite queue/state:
-
-```text
-data/postal_autoclip.db
-```
-
-Credentials:
-
-```text
-secrets/
-```
-
-`config.json`, tokens, databases, VOD data, renders, and generated cover images are ignored by Git.
+Source VODs, transcripts, game events, clip feedback, renders, analytics history and OAuth/access tokens stay local by default. Credential files under `secrets/` are Git-ignored. Only media/metadata you explicitly queue is sent to the selected social platform.
 
 ## Tests
 
@@ -281,18 +143,4 @@ secrets/
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-GitHub Actions also installs the project, compiles Python, and runs pytest on pushes to `main`.
-
-## Known limitations
-
-- Scheduled jobs run only while Postal AutoClip is running; overdue queued jobs remain stored until the next launch.
-- YouTube, TikTok, and Instagram each require your own developer/account authorization.
-- TikTok public Direct Post remains subject to TikTok app review/audit rules.
-- Instagram eligibility and publishing permissions are controlled by Meta.
-- The weekly planner optimizes variety using local heuristics; it does not predict actual social-platform performance.
-- YouTube custom-thumbnail availability can depend on channel/account eligibility; thumbnail failure is non-fatal.
-- Cover selection is event-aware timing, not full frame-by-frame object recognition.
-
-## Privacy
-
-VODs, transcripts, game-event metadata, ranking feedback, edits, renders, generated covers, schedule data, and credentials stay on your PC by default. The dashboard and RuneLite bridge bind to `127.0.0.1`. Only media/metadata that you explicitly queue is sent to the selected platform.
+GitHub Actions also runs install, Python compilation and pytest for pushes to `main`.
