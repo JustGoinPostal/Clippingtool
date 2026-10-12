@@ -1,24 +1,30 @@
 plugins {
-    id 'java'
+	id 'java'
 }
 
 repositories {
-    maven { url = 'https://repo.runelite.net' }
-    mavenCentral()
+	mavenLocal()
+	maven {
+		url = 'https://repo.runelite.net'
+		content {
+			includeGroupByRegex("net\\.runelite.*")
+		}
+	}
+	mavenCentral()
 }
 
-def runeLiteVersion = '1.13.1'
+def runeLiteVersion = 'latest.release'
 
 dependencies {
-    compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
-    testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
+	compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
+	testImplementation 'junit:junit:4.13.2'
+	testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
 }
 
 group = 'com.postal.autoclip'
-version = '0.3.0'
+version = '0.9.0'
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(11)
-    }
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+	options.release.set(11)
 }
