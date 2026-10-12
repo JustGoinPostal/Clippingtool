@@ -1,0 +1,49 @@
+name: Build Windows Package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'launcher/**'
+      - 'app/**'
+      - 'config.example.json'
+      - 'pyproject.toml'
+      - '*.ps1'
+      - '.github/workflows/windows-package.yml'
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build launcher
+        shell: pwsh
+        run: |
+          dotnet publish launcher/PostalAutoClipLauncher.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o build/launcher
+      - name: Assemble package
+        shell: pwsh
+        run: |
+          $dest = 'dist/PostalAutoClip-Windows'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item 'build/launcher/PostalAutoClip.exe' "$dest/PostalAutoClip.exe"
+          Copy-Item 'app' "$dest/app" -Recurse
+          if (Test-Path 'runelite-companion') { Copy-Item 'runelite-companion' "$dest/runelite-companion" -Recurse }
+          if (Test-Path 'docs') { Copy-Item 'docs' "$dest/docs" -Recurse }
+          Copy-Item 'config.example.json' "$dest/config.example.json"
+          Copy-Item 'pyproject.toml' "$dest/pyproject.toml"
+          Copy-Item 'README.md' "$dest/README.md"
+          Get-ChildItem -Path . -Filter '*.ps1' -File | ForEach-Object { Copy-Item $_.FullName $dest }
+          New-Item -ItemType Directory -Force -Path "$dest/data/input","$dest/data/output","$dest/data/cache","$dest/secrets" | Out-Null
+          Compress-Archive -Path "$dest/*" -DestinationPath 'dist/PostalAutoClip-Windows.zip' -Force
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PostalAutoClip-Windows
+          path: dist/PostalAutoClip-Windows.zip
+          retention-days: 30
