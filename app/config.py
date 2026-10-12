@@ -48,6 +48,17 @@ class Settings(BaseModel):
     caption_emphasis_scale: int = 118
     caption_uppercase: bool = True
 
+    # v0.5 automatic edit polish
+    auto_hook_enabled: bool = True
+    hook_duration_seconds: float = 2.8
+    hook_font_size: int = 68
+    hook_margin_v: int = 110
+    dynamic_zoom_enabled: bool = True
+    dynamic_zoom_strength: float = 0.16
+    dynamic_zoom_seconds: float = 2.6
+    quality_scoring_enabled: bool = True
+    best_variant_auto_select: bool = True
+
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = ""
     runelite_bridge_enabled: bool = True
