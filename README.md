@@ -1,40 +1,34 @@
-# Postal AutoClip v0.5
+# Postal AutoClip v0.6
 
-Postal AutoClip is a clean-room, local-first automatic VOD clipper for long gaming streams, tuned for OSRS and RuneLite. It watches OBS recordings, transcribes locally, scans gameplay/audio, learns from Keep/Great/Reject decisions, and renders captioned 9:16 Shorts without requiring a facecam.
+Postal AutoClip is a clean-room, local-first automatic VOD clipper for long gaming streams, tuned for OSRS and RuneLite. It watches OBS recordings, transcribes locally, detects important moments, learns from Keep/Great/Reject decisions, edits 9:16 Shorts, scores multiple versions, picks the best version, and can now queue/schedule publishing.
 
-v0.5 adds automatic editing polish: opening hooks, event-aware payoff zooms, per-render quality scoring, and automatic best-version selection.
+No facecam is required.
 
-## v0.5 highlights
+## v0.6 highlights
 
-- No facecam requirement.
-- Automatic opening hook text generated locally for every candidate.
-- Hooks can be edited or regenerated from the browser editor.
-- Hook text is burned into the opening seconds of the Short.
-- Event-aware dynamic zoom pulse in the OSRS focus panel.
-- Combat moments emphasize the combat area.
-- Raid/drop/collection-log moments emphasize the reward/chat area.
-- UI-heavy moments emphasize the right-side RuneLite interface.
-- Short (22s), Medium (38s), and Long (58s) renders receive separate quality scores.
-- Local quality scoring considers:
-  - hook readability
-  - pacing
-  - clip length fit
-  - payoff strength
-  - context
-  - dead air
-  - OSRS focus mode
-- Render All automatically compares the three outputs and marks the highest-scoring version as **BEST**.
-- The BEST render becomes the candidate's primary preview/output automatically.
-- All deterministic hook generation and quality scoring are local and require no paid API.
+- Local publishing queue and scheduler.
+- **Queue BEST** sends the highest-scoring rendered variant to the publishing queue.
+- YouTube Shorts upload through the official YouTube Data API.
+- Local Google OAuth flow using the `youtube.upload` scope.
+- TikTok Direct Post through the official Content Posting API using local `FILE_UPLOAD`.
+- TikTok creator-info lookup before posting so current allowed privacy options are used.
+- TikTok publish-status polling after upload.
+- Queue states: `queued`, `publishing`, `submitted`, `published`, `failed`.
+- Up to three automatic upload attempts for transient failures.
+- Scheduled publishing while Postal AutoClip is running.
+- Published YouTube URL / platform ID tracking.
+- Credentials are stored under local `secrets/` and are Git-ignored.
+- Instagram Reels is shown as prepared/not-enabled rather than pretending local direct file upload is available.
+- Nothing posts merely because it was rendered. You explicitly queue a post first.
 
-## Pipeline
+## Full pipeline
 
-`OBS recording + optional RuneLite events -> audio/video scan -> Whisper -> exact event alignment -> candidate scoring -> personal ranking -> automatic hook -> browser edit -> OSRS-aware render -> 22s / 38s / 58s quality comparison -> BEST version`
+`OBS recording + optional RuneLite events -> audio/video/Whisper analysis -> candidate scoring -> preference ranking -> hook -> browser edit -> 22s/38s/58s renders -> local quality scoring -> BEST version -> publishing queue -> YouTube/TikTok`
 
 ## Install on Windows
 
 1. Install Python 3.11 or 3.12.
-2. Clone or download this repository.
+2. Clone/download this repository.
 3. Open PowerShell in the project folder.
 4. Run:
 
@@ -48,204 +42,180 @@ Dashboard:
 
 `http://127.0.0.1:8787`
 
-The installer attempts to install FFmpeg with `winget` if FFmpeg is missing.
+The installer installs project dependencies and attempts to install FFmpeg through `winget` if needed.
 
-## OBS workflow
+## Normal workflow
 
-Set `watch_folder` in `config.json` to your OBS recording folder, for example:
+1. Set `watch_folder` in `config.json` to your OBS recording folder.
+2. Finish a stream or manually analyze a recording.
+3. Review detected candidates.
+4. Keep/Great/Reject clips to teach the local preference model.
+5. Edit timing/hook if needed.
+6. Click **Render All**.
+7. Postal AutoClip makes 22s, 38s and 58s versions and marks one **BEST**.
+8. Click **Queue BEST**.
+9. Choose YouTube or TikTok, privacy and schedule time.
+10. Postal AutoClip publishes the job when it becomes due while the app is running.
 
-```json
-"watch_folder": "D:/OBS/Recordings"
+## YouTube setup
+
+Postal AutoClip uses Google's official OAuth flow and the narrow `youtube.upload` scope.
+
+1. Create/select a Google Cloud project.
+2. Enable the **YouTube Data API v3**.
+3. Configure the OAuth consent screen.
+4. Create an OAuth client of type **Desktop app**.
+5. Download the client JSON.
+6. Save it as:
+
+```text
+secrets/youtube_client_secret.json
 ```
 
-When OBS finishes a supported recording, Postal AutoClip can queue it automatically.
+7. Start Postal AutoClip.
+8. Click **Connect YouTube** in the Publishing accounts panel.
+9. Complete Google's authorization window.
 
-Supported source extensions include `.mkv`, `.mp4`, `.mov`, `.webm`, `.m4v`, and `.ts`.
+The refresh token is stored locally at:
 
-## Editing a candidate
-
-1. Let Postal AutoClip analyze the recording.
-2. Open a candidate with **Edit + Scores**.
-3. Scrub the original source VOD.
-4. Adjust exact start/end boundaries.
-5. Edit the generated opening hook if desired.
-6. Preview the source range.
-7. Render one length or choose **Render All + Pick Best**.
-8. Refresh scores to compare outputs.
-
-Changing timing or hook text clears that candidate's tracked render records because the old renders no longer represent the current edit. Existing files already written to disk are not deleted automatically.
-
-## Automatic hooks
-
-Enabled by default:
-
-```json
-"auto_hook_enabled": true,
-"hook_duration_seconds": 2.8,
-"hook_font_size": 68,
-"hook_margin_v": 110
+```text
+secrets/youtube_token.json
 ```
 
-Hooks are deterministic and event-aware, so they work without Ollama or a cloud model. Examples include PvP, big-hit, raid-reward, rare-drop, collection-log, death, and reaction-specific opening text.
+Both files are ignored by Git.
 
-The dashboard lets you overwrite the generated text manually or regenerate it.
+YouTube privacy choices in the dashboard are `private`, `unlisted`, and `public`.
 
-## Dynamic OSRS payoff zoom
+## TikTok setup
 
-The default `osrs_focus` layout keeps the full RuneLite frame for context and adds a second focus panel. v0.5 adds a brief zoom pulse around the likely payoff point instead of keeping that panel completely static.
+TikTok Direct Post requires a TikTok for Developers app with the Content Posting API and authorization for `video.publish`.
 
-Default settings:
+After obtaining a user access token, either set:
 
-```json
-"dynamic_zoom_enabled": true,
-"dynamic_zoom_strength": 0.16,
-"dynamic_zoom_seconds": 2.6
+```powershell
+$env:POSTAL_TIKTOK_ACCESS_TOKEN="your-access-token"
 ```
 
-This is event-aware reframing, not per-object computer vision tracking. It chooses a relevant OSRS screen region and emphasizes it near the expected payoff.
+or create this local file:
 
-## Render variants and BEST selection
-
-Default lengths:
-
-```json
-"render_variants": {
-  "short": 22,
-  "medium": 38,
-  "long": 58
-},
-"primary_variant": "medium",
-"quality_scoring_enabled": true,
-"best_variant_auto_select": true
+```text
+secrets/tiktok_token.json
 ```
 
-After a render finishes, Postal AutoClip gives that exact final timing window a local quality score. When multiple variants exist, the highest-scoring render is marked **BEST** and becomes the candidate's primary output.
-
-The quality score is a local editing heuristic, not a promise or prediction of actual views, retention, or virality.
-
-## OSRS-aware vertical layout
-
-The default layout is:
+with:
 
 ```json
-"layout": "osrs_focus"
+{
+  "access_token": "your-access-token"
+}
 ```
 
-Focus modes include:
+Do **not** commit TikTok credentials. `secrets/` is Git-ignored.
 
-- PvP / big hit / death / player loot -> combat area
-- drops / raid rewards / collection log -> reward/chat area
-- strong inventory/UI activity -> right-side interface
-- otherwise -> general center gameplay
+Before a TikTok post is queued, Postal AutoClip can call TikTok creator-info to obtain the creator's currently allowed privacy options. The dashboard uses those options rather than inventing privacy values.
 
-You can still use `blur_fit` or `center_crop` in `config.json`.
+For local rendered files, Postal AutoClip uses TikTok `FILE_UPLOAD`. After the upload, the queue changes to `submitted` and the worker polls TikTok's publish-status endpoint until it reports `PUBLISH_COMPLETE` or `FAILED`.
 
-## Dead-air trimming
+Important TikTok limitation: unaudited Direct Post clients are restricted by TikTok and generally cannot publish publicly until the app completes TikTok's audit/review process.
 
-Enabled by default:
+## Instagram Reels
+
+v0.6 intentionally does **not** fake Instagram direct local-file publishing. The dashboard marks Instagram as prepared/not enabled because the supported Meta publishing workflow requires additional app/account setup and a video URL that Meta can fetch.
+
+A hosted-media adapter can be added in a later release.
+
+## Publishing configuration
+
+Defaults in `config.json`:
 
 ```json
-"dead_air_trim_enabled": true,
-"dead_air_padding_seconds": 0.55,
-"dead_air_min_clip_seconds": 6.0
+{
+  "publishing_enabled": true,
+  "publish_poll_seconds": 20,
+  "youtube_default_privacy": "private",
+  "tiktok_default_privacy": "SELF_ONLY"
+}
 ```
 
-This tightens speech/reaction/chat candidates only. PvP, drops, raids, big hits, and other gameplay-heavy moments stay continuous so context is not cut out.
+If the app is closed when a job becomes due, the job stays in the SQLite queue. When Postal AutoClip starts again, due jobs can run normally.
 
-## Captions
+## Publishing safety / control
 
-Useful caption settings:
+Rendering does not publish anything automatically.
 
-```json
-"caption_font": "Arial",
-"caption_font_size": 76,
-"caption_words_per_group": 4,
-"caption_margin_v": 205,
-"caption_emphasis_scale": 118,
-"caption_uppercase": true
-```
+A post enters the publisher only after you click **Queue BEST** (or use the local publishing API). You can remove queued jobs before they begin, and failed jobs can be retried.
 
-Reaction, PvP, and rare-drop words receive stronger animated emphasis while retaining word-level timing.
+Editing a clip's timing or hook invalidates its unpublished queued jobs and old render records so a stale edit is not accidentally posted.
 
-## RuneLite companion bridge
+## Existing v0.5 editing features
+
+- Automatic event-aware opening hooks.
+- Editable/regeneratable hook text.
+- Dynamic OSRS payoff zoom pulse.
+- OSRS-aware focus for combat, reward/chat, UI, or center gameplay.
+- Animated word-synced captions.
+- Conservative dead-air trimming.
+- 22s / 38s / 58s render variants.
+- Local quality scores and automatic BEST selection.
+
+## RuneLite companion
 
 The optional companion source is in:
 
 `runelite-companion/`
 
-Default endpoint:
+Default event endpoint:
 
 `http://127.0.0.1:8787/api/game-events`
 
-Default local bridge token:
-
-`postal-local`
-
-The companion can provide exact event timing for loot, PK/player loot, collection-log messages, deaths, big hits, and selected important game messages. Postal AutoClip combines those signals with video, audio, transcript, and learned preferences.
-
-The companion is optional. Video/audio/transcript analysis still works without it.
-
-## Test the RuneLite bridge
-
-Start Postal AutoClip and run:
-
-```powershell
-.\test_bridge.ps1
-```
-
-The dashboard should receive the test event.
-
-## Learning your taste
-
-- **Keep** = good clip
-- **Great** = strong positive example
-- **Reject** = bad/uninteresting clip
-
-After enough decisions, the local preference model changes future candidate ranking. Nothing needs to leave your PC for this step.
+The companion can supply exact timestamps for loot, PK/player loot, collection-log messages, deaths, big hits and selected game messages. The clipping system still works without it using video/audio/transcript analysis.
 
 ## Optional Ollama second pass
 
-Set an installed local Ollama model in `config.json`:
+Set an installed local model in `config.json`:
 
 ```json
 "ollama_model": "your-local-model-name"
 ```
 
-The optional local model can add a second opinion on hook/context/payoff and suggest a title. If Ollama is absent, the deterministic pipeline continues normally.
+This is optional. Core clipping, hook generation, editing, scoring and scheduling do not require a paid AI API.
 
-## Output
+## Output and local data
 
-Rendered files go to:
+Rendered files:
 
 `data/output/`
 
-Output filenames include the render variant, for example:
+SQLite state/queue:
 
-`0012_short_example_title.mp4`
+`data/postal_autoclip.db`
 
-`0012_medium_example_title.mp4`
+Local credentials:
 
-`0012_long_example_title.mp4`
+`secrets/`
 
-## Development tests
+The repository `.gitignore` excludes `config.json`, databases, rendered VOD data and all files under `secrets/`.
 
-Install the optional dev dependency and run:
+## Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+GitHub Actions also runs installation, Python compilation and pytest on pushes to `main`.
+
 ## Known limitations
 
-- The v0.5 quality score is a deterministic editing heuristic and does not predict social-platform performance.
-- Dynamic zoom currently emphasizes the selected OSRS screen region around an estimated payoff point; it is not yet tracking a specific item, hitsplat, player, or NPC frame by frame.
-- Source-VOD editing depends on the browser being able to seek the source container/codec.
-- OBS start-time alignment prefers media creation metadata and otherwise estimates from file modified time and duration.
-- Exact RuneLite events are available only when Postal AutoClip and the companion can communicate during the session.
-- Direct TikTok/YouTube/Instagram publishing is not included yet.
-- Public RuneLite Plugin Hub distribution would require the normal RuneLite review/submission process.
+- Scheduled publishing only runs while Postal AutoClip is running; due jobs remain queued while it is offline.
+- YouTube requires your own Google OAuth client configuration.
+- TikTok requires your own approved developer app, user authorization and access token.
+- TikTok public Direct Post is subject to TikTok's app audit and platform rules.
+- TikTok processing is asynchronous; `submitted` is intentionally different from `published`.
+- Instagram direct publishing is not enabled in v0.6.
+- Local quality scores are editing heuristics, not guarantees of views or virality.
+- Dynamic zoom chooses OSRS-aware regions; it is not yet tracking every item/player/NPC frame-by-frame.
 
 ## Privacy
 
-Everything is local by default: source VODs, transcripts, video features, RuneLite event metadata, feedback, hooks, quality scores, edits, ranking, and renders. The default dashboard and bridge bind to `127.0.0.1`.
+Source VODs, transcripts, game-event metadata, feedback, edits, renders, queue state and tokens stay on your PC by default. The dashboard and RuneLite bridge bind to `127.0.0.1`. Only media/metadata you explicitly queue is sent to the selected social platform.
