@@ -65,6 +65,19 @@ class Settings(BaseModel):
     youtube_default_privacy: str = "private"
     tiktok_default_privacy: str = "SELF_ONLY"
 
+    # v0.7 distribution / covers / Instagram
+    auto_cover_enabled: bool = True
+    youtube_set_thumbnail: bool = True
+    instagram_graph_version: str = "v26.0"
+    instagram_default_privacy: str = "public"
+    instagram_share_to_feed: bool = True
+    duplicate_window_days: int = 30
+    duplicate_similarity_threshold: float = 0.62
+    distribution_slots: list[str] = Field(default_factory=lambda: ["12:00", "18:30"])
+    platform_offsets_minutes: dict[str, int] = Field(default_factory=lambda: {
+        "youtube": 0, "tiktok": 20, "instagram": 40
+    })
+
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = ""
     runelite_bridge_enabled: bool = True
@@ -91,6 +104,7 @@ def load_settings() -> Settings:
     s = Settings.model_validate(data)
     for p in (s.watch_path, s.output_path, s.cache_path):
         p.mkdir(parents=True, exist_ok=True)
+    (ROOT / "data" / "covers").mkdir(parents=True, exist_ok=True)
     (ROOT / "secrets").mkdir(parents=True, exist_ok=True)
     return s
 
