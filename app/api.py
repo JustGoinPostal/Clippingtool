@@ -9,8 +9,9 @@ from . import db
 from .watcher import scan_once, start_watcher
 from .pipeline import process_job, render_clip_id, render_all_variants
 from .learning import learned_profile
+from .hooks import generate_hook
 
-app=FastAPI(title="Postal AutoClip",version="0.4.0")
+app=FastAPI(title="Postal AutoClip",version="0.5.0")
 app.mount("/static",StaticFiles(directory=ROOT/"app"/"static"),name="static")
 
 @app.on_event("startup")
@@ -24,9 +25,12 @@ def home():
 @app.get("/api/status")
 def status():
     s=load_settings()
-    return {"ok":True,"version":"0.4.0","watch_folder":str(s.watch_path),
+    return {"ok":True,"version":"0.5.0","watch_folder":str(s.watch_path),
             "output_folder":str(s.output_path),"render_variants":s.render_variants,
-            "primary_variant":s.primary_variant,"layout":s.layout}
+            "primary_variant":s.primary_variant,"layout":s.layout,
+            "auto_hook_enabled":s.auto_hook_enabled,"dynamic_zoom_enabled":s.dynamic_zoom_enabled,
+            "quality_scoring_enabled":s.quality_scoring_enabled,
+            "best_variant_auto_select":s.best_variant_auto_select}
 
 @app.get("/api/jobs")
 def jobs():
@@ -59,9 +63,25 @@ def edit_clip(clip_id:int,payload:dict=Body(...)):
     start=max(0.0,start); end=min(total,end) if total else end
     if end-start < 0.75: raise HTTPException(400,"Clip must be at least 0.75 seconds")
     if start>=end: raise HTTPException(400,"Start must be before end")
-    db.exec_sql("UPDATE clips SET start=?,end=?,status='candidate',output_path='' WHERE id=?",(start,end,clip_id))
+    hook_text=str(payload.get("hook_text",row.get("hook_text") or "")).strip()[:72]
+    changed=(abs(start-float(row["start"]))>0.001 or abs(end-float(row["end"]))>0.001
+             or hook_text != str(row.get("hook_text") or ""))
+    if changed:
+        db.exec_sql("""UPDATE clips SET start=?,end=?,hook_text=?,status='candidate',
+                    output_path='',best_variant='' WHERE id=?""",(start,end,hook_text,clip_id))
+        db.exec_sql("DELETE FROM renders WHERE clip_id=?",(clip_id,))
+    return {"ok":True,"clip_id":clip_id,"start":start,"end":end,"hook_text":hook_text,
+            "renders_invalidated":changed}
+
+@app.post("/api/clips/{clip_id}/hook/regenerate")
+def regenerate_hook(clip_id:int):
+    row=db.q("SELECT * FROM clips WHERE id=?",(clip_id,),one=True)
+    if not row: raise HTTPException(404,"Clip not found")
+    hook=generate_hook(row)
+    db.exec_sql("UPDATE clips SET hook_text=?,status='candidate',output_path='',best_variant='' WHERE id=?",
+                (hook,clip_id))
     db.exec_sql("DELETE FROM renders WHERE clip_id=?",(clip_id,))
-    return {"ok":True,"clip_id":clip_id,"start":start,"end":end}
+    return {"ok":True,"hook_text":hook}
 
 @app.post("/api/ingest")
 def ingest(payload:dict=Body(...)):
