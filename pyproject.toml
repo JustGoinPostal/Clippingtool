@@ -1,6 +1,6 @@
 [project]
 name = "postal-autoclip"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local-first automatic stream VOD clipper for Shorts/Reels/TikTok"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -13,8 +13,14 @@ dependencies = [
   "numpy>=1.26,<3",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.3"]
+
 [project.scripts]
 postal-autoclip = "app.api:run"
 
 [tool.setuptools]
 packages = ["app"]
+
+[tool.setuptools.package-data]
+app = ["static/*"]
