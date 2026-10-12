@@ -45,6 +45,19 @@
   "publish_poll_seconds": 20,
   "youtube_default_privacy": "private",
   "tiktok_default_privacy": "SELF_ONLY",
+  "auto_cover_enabled": true,
+  "youtube_set_thumbnail": true,
+  "instagram_graph_version": "v26.0",
+  "instagram_default_privacy": "public",
+  "instagram_share_to_feed": true,
+  "duplicate_window_days": 30,
+  "duplicate_similarity_threshold": 0.62,
+  "distribution_slots": ["12:00", "18:30"],
+  "platform_offsets_minutes": {
+    "youtube": 0,
+    "tiktok": 20,
+    "instagram": 40
+  },
   "ollama_url": "http://127.0.0.1:11434",
   "ollama_model": "",
   "keywords": {
