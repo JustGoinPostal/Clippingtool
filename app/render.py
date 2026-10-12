@@ -6,7 +6,7 @@ from .media import require_ffmpeg
 from .captions import write_ass
 
 SPEECHY_TYPES={"speech","reaction","chat"}
-COMBAT_TYPES={"pvp","pvp_kill","death","player_death","big_hit","combat","player_loot","boss_kill"}
+COMBAT_TYPES={"pvp","pvp_kill","death","player_death","big_hit","big_hit_taken","combat","player_loot","boss_kill"}
 REWARD_TYPES={"drop","rare_drop","raid_reward","raid_complete","collection_log","loot","npc_loot"}
 
 def _ffmpeg_filter_path(p: Path):
