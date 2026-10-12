@@ -1,36 +1,35 @@
-# Postal AutoClip v0.4
+# Postal AutoClip v0.5
 
-A clean-room, local-first automatic VOD clipper for long gaming streams, tuned for OSRS and RuneLite. It watches OBS recordings, transcribes locally, scans gameplay/audio, learns from Keep/Great/Reject decisions, and renders captioned 9:16 Shorts without requiring a facecam.
+Postal AutoClip is a clean-room, local-first automatic VOD clipper for long gaming streams, tuned for OSRS and RuneLite. It watches OBS recordings, transcribes locally, scans gameplay/audio, learns from Keep/Great/Reject decisions, and renders captioned 9:16 Shorts without requiring a facecam.
 
-v0.4 adds the editing layer: source-VOD scrubbing, editable clip boundaries, multiple output lengths, smarter OSRS-focused reframing, upgraded captions, and conservative dead-air cleanup.
+v0.5 adds automatic editing polish: opening hooks, event-aware payoff zooms, per-render quality scoring, and automatic best-version selection.
 
-## v0.4 highlights
+## v0.5 highlights
 
 - No facecam requirement.
-- Browser clip editor using the original source recording.
-- Scrub the VOD and set exact clip start/end points.
-- Preview the selected range before saving.
-- Render three variants from one candidate:
-  - Short: 22 seconds
-  - Medium: 38 seconds
-  - Long: 58 seconds
-- Render All button for all three versions.
-- Each render is tracked separately instead of overwriting the previous export.
-- New `osrs_focus` vertical layout.
-- Event-aware focus modes:
-  - combat/PvP/big hit -> center combat area
-  - drops/raid rewards/collection log -> chat/reward area
-  - strong UI/inventory activity -> right-side interface
-  - otherwise -> general center gameplay
-- The full RuneLite frame remains visible for context while a second focus panel enlarges the important area.
-- Conservative dead-air trimming for speech/reaction/chat clips.
-- PvP, drops, raids, big hits, and gameplay-heavy events remain continuous by default.
-- Tighter word-synced ASS captions with emphasis and pop animation.
-- Existing RuneLite event bridge, visual analysis, audio analysis, transcription, and personalized ranking remain intact.
+- Automatic opening hook text generated locally for every candidate.
+- Hooks can be edited or regenerated from the browser editor.
+- Hook text is burned into the opening seconds of the Short.
+- Event-aware dynamic zoom pulse in the OSRS focus panel.
+- Combat moments emphasize the combat area.
+- Raid/drop/collection-log moments emphasize the reward/chat area.
+- UI-heavy moments emphasize the right-side RuneLite interface.
+- Short (22s), Medium (38s), and Long (58s) renders receive separate quality scores.
+- Local quality scoring considers:
+  - hook readability
+  - pacing
+  - clip length fit
+  - payoff strength
+  - context
+  - dead air
+  - OSRS focus mode
+- Render All automatically compares the three outputs and marks the highest-scoring version as **BEST**.
+- The BEST render becomes the candidate's primary preview/output automatically.
+- All deterministic hook generation and quality scoring are local and require no paid API.
 
 ## Pipeline
 
-`OBS recording + optional RuneLite events -> audio/video scan -> Whisper -> exact event alignment -> candidate scoring -> personal ranking -> browser editor -> OSRS-aware 9:16 render -> 22s / 38s / 58s exports`
+`OBS recording + optional RuneLite events -> audio/video scan -> Whisper -> exact event alignment -> candidate scoring -> personal ranking -> automatic hook -> browser edit -> OSRS-aware render -> 22s / 38s / 58s quality comparison -> BEST version`
 
 ## Install on Windows
 
@@ -66,28 +65,46 @@ Supported source extensions include `.mkv`, `.mp4`, `.mov`, `.webm`, `.m4v`, and
 ## Editing a candidate
 
 1. Let Postal AutoClip analyze the recording.
-2. Open a candidate from the dashboard with **Edit Timing**.
+2. Open a candidate with **Edit + Scores**.
 3. Scrub the original source VOD.
-4. Use **Set Start = Playhead** and **Set End = Playhead** or type exact seconds.
-5. Use **Preview Range** to review the selection.
-6. Save the timing.
-7. Render Short, Medium, Long, or all three.
+4. Adjust exact start/end boundaries.
+5. Edit the generated opening hook if desired.
+6. Preview the source range.
+7. Render one length or choose **Render All + Pick Best**.
+8. Refresh scores to compare outputs.
 
-Editing the timing clears the tracked render records for that candidate so new exports are tied to the new range. Old files are not automatically deleted from disk.
+Changing timing or hook text clears that candidate's tracked render records because the old renders no longer represent the current edit. Existing files already written to disk are not deleted automatically.
 
-## OSRS-aware vertical layout
+## Automatic hooks
 
-The default layout is now:
+Enabled by default:
 
 ```json
-"layout": "osrs_focus"
+"auto_hook_enabled": true,
+"hook_duration_seconds": 2.8,
+"hook_font_size": 68,
+"hook_margin_v": 110
 ```
 
-Instead of blindly center-cropping RuneLite, v0.4 keeps a full-game view and adds a zoomed focus panel selected from the candidate type and visual features.
+Hooks are deterministic and event-aware, so they work without Ollama or a cloud model. Examples include PvP, big-hit, raid-reward, rare-drop, collection-log, death, and reaction-specific opening text.
 
-You can still use `blur_fit` or `center_crop` in `config.json`.
+The dashboard lets you overwrite the generated text manually or regenerate it.
 
-## Render variants
+## Dynamic OSRS payoff zoom
+
+The default `osrs_focus` layout keeps the full RuneLite frame for context and adds a second focus panel. v0.5 adds a brief zoom pulse around the likely payoff point instead of keeping that panel completely static.
+
+Default settings:
+
+```json
+"dynamic_zoom_enabled": true,
+"dynamic_zoom_strength": 0.16,
+"dynamic_zoom_seconds": 2.6
+```
+
+This is event-aware reframing, not per-object computer vision tracking. It chooses a relevant OSRS screen region and emphasizes it near the expected payoff.
+
+## Render variants and BEST selection
 
 Default lengths:
 
@@ -97,10 +114,31 @@ Default lengths:
   "medium": 38,
   "long": 58
 },
-"primary_variant": "medium"
+"primary_variant": "medium",
+"quality_scoring_enabled": true,
+"best_variant_auto_select": true
 ```
 
-If a candidate is already shorter than the target length, Postal AutoClip keeps the available range instead of padding fake footage.
+After a render finishes, Postal AutoClip gives that exact final timing window a local quality score. When multiple variants exist, the highest-scoring render is marked **BEST** and becomes the candidate's primary output.
+
+The quality score is a local editing heuristic, not a promise or prediction of actual views, retention, or virality.
+
+## OSRS-aware vertical layout
+
+The default layout is:
+
+```json
+"layout": "osrs_focus"
+```
+
+Focus modes include:
+
+- PvP / big hit / death / player loot -> combat area
+- drops / raid rewards / collection log -> reward/chat area
+- strong inventory/UI activity -> right-side interface
+- otherwise -> general center gameplay
+
+You can still use `blur_fit` or `center_crop` in `config.json`.
 
 ## Dead-air trimming
 
@@ -112,11 +150,11 @@ Enabled by default:
 "dead_air_min_clip_seconds": 6.0
 ```
 
-This only tightens speech-like candidates such as reactions and chat-heavy moments. It intentionally avoids cutting the middle out of gameplay-heavy events where context and continuous action matter.
+This tightens speech/reaction/chat candidates only. PvP, drops, raids, big hits, and other gameplay-heavy moments stay continuous so context is not cut out.
 
 ## Captions
 
-Useful v0.4 caption settings:
+Useful caption settings:
 
 ```json
 "caption_font": "Arial",
@@ -127,11 +165,11 @@ Useful v0.4 caption settings:
 "caption_uppercase": true
 ```
 
-Words associated with reactions, rare drops, PvP, and major OSRS moments receive extra visual emphasis while retaining word-level timing.
+Reaction, PvP, and rare-drop words receive stronger animated emphasis while retaining word-level timing.
 
 ## RuneLite companion bridge
 
-The optional source project is in:
+The optional companion source is in:
 
 `runelite-companion/`
 
@@ -143,13 +181,11 @@ Default local bridge token:
 
 `postal-local`
 
-This must match `runelite_bridge_token` in `config.json`.
+The companion can provide exact event timing for loot, PK/player loot, collection-log messages, deaths, big hits, and selected important game messages. Postal AutoClip combines those signals with video, audio, transcript, and learned preferences.
 
-The companion can provide exact event timing for loot, PK/player loot, collection-log messages, deaths, big hits, and selected important game messages. Postal AutoClip then combines those events with the surrounding video, audio, transcript, and learned preferences.
+The companion is optional. Video/audio/transcript analysis still works without it.
 
-The RuneLite companion is optional. Video/audio/transcript analysis still works without it.
-
-## Test the bridge
+## Test the RuneLite bridge
 
 Start Postal AutoClip and run:
 
@@ -175,7 +211,7 @@ Set an installed local Ollama model in `config.json`:
 "ollama_model": "your-local-model-name"
 ```
 
-The local second pass can score hook/context/payoff and suggest a title. If Ollama is not installed, the deterministic pipeline continues normally.
+The optional local model can add a second opinion on hook/context/payoff and suggest a title. If Ollama is absent, the deterministic pipeline continues normally.
 
 ## Output
 
@@ -183,7 +219,7 @@ Rendered files go to:
 
 `data/output/`
 
-v0.4 output filenames include the render variant, for example:
+Output filenames include the render variant, for example:
 
 `0012_short_example_title.mp4`
 
@@ -202,8 +238,9 @@ Install the optional dev dependency and run:
 
 ## Known limitations
 
-- The focus panel uses OSRS-aware heuristics and event categories; it is not yet object tracking every individual item or player on every frame.
-- Source-VOD editing works through the local dashboard and depends on the browser being able to seek the source container/codec.
+- The v0.5 quality score is a deterministic editing heuristic and does not predict social-platform performance.
+- Dynamic zoom currently emphasizes the selected OSRS screen region around an estimated payoff point; it is not yet tracking a specific item, hitsplat, player, or NPC frame by frame.
+- Source-VOD editing depends on the browser being able to seek the source container/codec.
 - OBS start-time alignment prefers media creation metadata and otherwise estimates from file modified time and duration.
 - Exact RuneLite events are available only when Postal AutoClip and the companion can communicate during the session.
 - Direct TikTok/YouTube/Instagram publishing is not included yet.
@@ -211,4 +248,4 @@ Install the optional dev dependency and run:
 
 ## Privacy
 
-Everything is local by default: source VODs, transcripts, video features, RuneLite event metadata, feedback, edits, ranking, and renders. The default dashboard and bridge bind to `127.0.0.1`.
+Everything is local by default: source VODs, transcripts, video features, RuneLite event metadata, feedback, hooks, quality scores, edits, ranking, and renders. The default dashboard and bridge bind to `127.0.0.1`.
