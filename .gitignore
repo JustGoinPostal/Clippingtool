@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+config.json
+data/input/*
+data/output/*
+data/cache/*
+data/*.db
+!data/input/.gitkeep
+!data/output/.gitkeep
+!data/cache/.gitkeep
