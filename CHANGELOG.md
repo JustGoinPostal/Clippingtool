@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.0
+
+- Changed the default distribution philosophy to cross-post the same strong original clip across YouTube, TikTok, and Instagram when those platforms are selected.
+- Distribution API fallbacks now target all three platforms instead of YouTube only.
+- Added YouTube Analytics collection with a separate read-only OAuth token.
+- Added TikTok owned-video analytics through `video.list` when a safely matchable public post ID is available.
+- Added Instagram Reel insights collection with per-metric fallback so one unsupported metric cannot break the whole analytics pass.
+- Added local SQLite analytics history for published posts.
+- Added cross-platform performance scoring using views, weighted engagement, and retention where available.
+- Added relative scoring against the creator's own platform history after enough posts exist.
+- Added audience-performance learning that blends into future clip ranking while preserving explicit Keep/Great/Reject preferences.
+- Added minimum-age and minimum-view guardrails before analytics can influence ranking.
+- Added automatic periodic analytics refresh while Postal AutoClip is running.
+- Added `connect_analytics.ps1` for YouTube read-only analytics authorization.
+- Added `refresh_analytics.ps1` for immediate manual metric collection.
+- Added local analytics dashboard at `/static/analytics.html`.
+- Added analytics API endpoints and audience-weight visibility in `/api/profile`.
+- Added v0.8 analytics regression tests.
+
 ## 0.7.0
 
 - Added Instagram Reels publishing through Meta's local resumable upload flow.
