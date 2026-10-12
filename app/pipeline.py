@@ -13,6 +13,8 @@ from .learning import learned_profile
 from .ranker import local_ai_second_pass
 from .media_time import recording_start_epoch
 from .osrs_events import map_events_to_recording
+from .hooks import generate_hook
+from .quality import evaluate_render
 
 def _key(path: Path):
     st=path.stat()
@@ -63,6 +65,7 @@ def process_job(job_id: int):
         for c in candidates:
             c["title"],c["description"],c["hashtags"]=make_metadata(c)
             if c.get("ai_title"): c["title"]=c["ai_title"]
+            c["hook_text"]=generate_hook(c) if s.auto_hook_enabled else ""
         db.replace_clips(job_id,candidates)
         db.update_job(job_id,status="ready",progress=1.0,
                       message=f"Found {len(candidates)} diverse candidate clips")
@@ -86,11 +89,18 @@ def render_clip_id(clip_id: int, variant: str|None=None):
     db.exec_sql("UPDATE clips SET status='rendering' WHERE id=?",(clip_id,))
     try:
         result=render_clip(source,clip,tx.get("words",[]),out,s,variant=variant)
-        db.upsert_render(clip_id,variant,str(out),result["start"],result["end"],result["focus"])
-        if variant==s.primary_variant or not clip.get("output_path"):
-            db.exec_sql("UPDATE clips SET status='rendered', output_path=? WHERE id=?",(str(out),clip_id))
-        else:
-            db.exec_sql("UPDATE clips SET status='rendered' WHERE id=?",(clip_id,))
+        quality=(evaluate_render(clip,tx.get("words",[]),result,str(clip.get("hook_text") or ""))
+                 if s.quality_scoring_enabled else {"score":0.0})
+        db.upsert_render(clip_id,variant,str(out),result["start"],result["end"],result["focus"],
+                         quality_score=float(quality.get("score",0) or 0),quality=quality)
+        best=None
+        if s.best_variant_auto_select and s.quality_scoring_enabled:
+            best=db.choose_best_render(clip_id)
+        elif variant==s.primary_variant or not clip.get("output_path"):
+            db.exec_sql("UPDATE clips SET output_path=?,best_variant=? WHERE id=?",(str(out),variant,clip_id))
+        db.exec_sql("UPDATE clips SET status='rendered' WHERE id=?",(clip_id,))
+        result["quality"]=quality
+        result["best_variant"]=(best or {}).get("variant") if best else variant
         return result
     except Exception:
         db.exec_sql("UPDATE clips SET status='error' WHERE id=?",(clip_id,))
@@ -101,4 +111,6 @@ def render_all_variants(clip_id: int):
     results=[]
     for variant in s.render_variants:
         results.append(render_clip_id(clip_id,variant))
+    if s.best_variant_auto_select and s.quality_scoring_enabled:
+        db.choose_best_render(clip_id)
     return results
