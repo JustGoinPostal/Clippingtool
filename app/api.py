@@ -17,13 +17,14 @@ from .publishing import (
     process_due_posts, start_publish_worker,
 )
 from .analytics import build_summary, collect_all, connect_youtube_analytics, youtube_analytics_status
+from .account_server import start_account_server
 
-app=FastAPI(title="Postal AutoClip",version="0.8.0")
+app=FastAPI(title="Postal AutoClip",version="0.9.0")
 app.mount("/static",StaticFiles(directory=ROOT/"app"/"static"),name="static")
 
 @app.on_event("startup")
 def startup():
-    db.init_db(); s=load_settings(); start_watcher()
+    db.init_db(); s=load_settings(); start_watcher(); start_account_server()
     if s.publishing_enabled: start_publish_worker()
 
 @app.get("/",response_class=HTMLResponse)
@@ -32,7 +33,7 @@ def home(): return (ROOT/"app"/"static"/"index.html").read_text(encoding="utf-8"
 @app.get("/api/status")
 def status():
     s=load_settings()
-    return {"ok":True,"version":"0.8.0","watch_folder":str(s.watch_path),"output_folder":str(s.output_path),
+    return {"ok":True,"version":"0.9.0","watch_folder":str(s.watch_path),"output_folder":str(s.output_path),
             "render_variants":s.render_variants,"primary_variant":s.primary_variant,"layout":s.layout,
             "auto_hook_enabled":s.auto_hook_enabled,"dynamic_zoom_enabled":s.dynamic_zoom_enabled,
             "quality_scoring_enabled":s.quality_scoring_enabled,"best_variant_auto_select":s.best_variant_auto_select,
