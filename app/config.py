@@ -88,6 +88,11 @@ class Settings(BaseModel):
     analytics_learning_min_age_hours: float = 24.0
     analytics_learning_min_views: int = 100
 
+    # v0.9 platform-specific learning without splitting the content calendar
+    synchronized_crosspost_enabled: bool = True
+    platform_fit_enabled: bool = True
+    platform_variant_min_samples: int = 3
+
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = ""
     runelite_bridge_enabled: bool = True
