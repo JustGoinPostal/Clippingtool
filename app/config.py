@@ -26,11 +26,28 @@ class Settings(BaseModel):
     default_clip_seconds: int = 50
     pre_roll_seconds: int = 12
     post_roll_seconds: int = 28
-    layout: str = "blur_fit"
+
+    # v0.4 editing / rendering
+    layout: str = "osrs_focus"
     render_width: int = 1080
     render_height: int = 1920
+    render_variants: dict[str, int] = Field(default_factory=lambda: {
+        "short": 22, "medium": 38, "long": 58
+    })
+    primary_variant: str = "medium"
+    dead_air_trim_enabled: bool = True
+    dead_air_padding_seconds: float = 0.55
+    dead_air_min_clip_seconds: float = 6.0
+    osrs_focus_panel_height: int = 700
+    osrs_focus_margin: int = 50
+
     caption_font: str = "Arial"
-    caption_font_size: int = 72
+    caption_font_size: int = 76
+    caption_words_per_group: int = 4
+    caption_margin_v: int = 205
+    caption_emphasis_scale: int = 118
+    caption_uppercase: bool = True
+
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = ""
     runelite_bridge_enabled: bool = True
@@ -50,15 +67,14 @@ class Settings(BaseModel):
     @property
     def cache_path(self) -> Path: return self.path(self.cache_folder)
 
-
 def load_settings() -> Settings:
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(EXAMPLE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     s = Settings.model_validate(data)
-    for p in (s.watch_path, s.output_path, s.cache_path): p.mkdir(parents=True, exist_ok=True)
+    for p in (s.watch_path, s.output_path, s.cache_path):
+        p.mkdir(parents=True, exist_ok=True)
     return s
-
 
 def save_settings(data: dict[str, Any]) -> Settings:
     current = load_settings().model_dump()
