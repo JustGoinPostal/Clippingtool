@@ -72,10 +72,8 @@ public sealed class MainForm : Form
         AddHeader(right, "STATUS", 18);
         AddStatus(right, "Server", serverState, 62); AddStatus(right, "Setup", setupState, 108); AddStatus(right, "YouTube", ytState, 154);
         AddStatus(right, "TikTok", tiktokState, 200); AddStatus(right, "Instagram", igState, 246); AddStatus(right, "RuneLite", rlState, 292);
-        right.Controls.Add(MakeButton("Connect YouTube", 22, 350, 135, 38, async (_, _) => await PostLocalAsync("/api/publishing/youtube/connect")));
-        right.Controls.Add(MakeButton("Connect Analytics", 168, 350, 140, 38, async (_, _) => await PostLocalAsync("/api/analytics/youtube/connect")));
-        right.Controls.Add(MakeButton("TikTok / Instagram", 22, 400, 286, 38, async (_, _) => await OpenAccountsAsync()));
-        right.Controls.Add(new Label { Left = 22, Top = 450, Width = 286, Height = 55, ForeColor = Color.Silver, Text = "Account app keys and OAuth tokens stay local. Use Accounts to connect TikTok and Instagram through your browser." });
+        right.Controls.Add(MakeButton("MANAGE ACCOUNTS", 22, 350, 286, 44, async (_, _) => await OpenAccountsAsync()));
+        right.Controls.Add(new Label { Left = 22, Top = 410, Width = 286, Height = 92, ForeColor = Color.Silver, Text = "YouTube publishing + analytics, TikTok, and Instagram are all connected from Accounts. OAuth tokens and developer app secrets stay local on this PC." });
 
         FormClosing += (_, _) => StopServer();
         Load += async (_, _) => { EnsureConfig(); LoadObsFolder(); await RefreshStatusAsync(); timer.Start(); };
@@ -177,7 +175,11 @@ public sealed class MainForm : Form
     {
         var up = await IsServerUp(); SetState(serverState, up ? "RUNNING" : "STOPPED", up);
         var ready = File.Exists(VenvPython) && CommandExists("ffmpeg"); SetState(setupState, ready ? "READY" : "SETUP NEEDED", ready);
-        var yt = File.Exists(Path.Combine(SecretsPath, "youtube_token.json")); SetState(ytState, yt ? "CONNECTED" : "NOT CONNECTED", yt);
+        var ytPub = File.Exists(Path.Combine(SecretsPath, "youtube_token.json"));
+        var ytAnalytics = File.Exists(Path.Combine(SecretsPath, "youtube_analytics_token.json"));
+        if (ytPub && ytAnalytics) SetState(ytState, "CONNECTED", true);
+        else if (ytPub || ytAnalytics) SetState(ytState, "PARTIAL", null);
+        else SetState(ytState, "NOT CONNECTED", false);
         var tt = File.Exists(Path.Combine(SecretsPath, "tiktok_token.json")); SetState(tiktokState, tt ? "CONNECTED" : "NOT CONNECTED", tt);
         var ig = File.Exists(Path.Combine(SecretsPath, "instagram_token.json")); SetState(igState, ig ? "CONNECTED" : "NOT CONNECTED", ig);
         if (up)
