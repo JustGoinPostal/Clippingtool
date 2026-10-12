@@ -86,6 +86,11 @@ def init_db():
         _ensure_column(c,"clips","features_json","TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(c,"clips","base_score","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"clips","personal_score","REAL NOT NULL DEFAULT 0")
+        _ensure_column(c,"clips","hook_text","TEXT NOT NULL DEFAULT ''")
+        _ensure_column(c,"clips","best_variant","TEXT NOT NULL DEFAULT ''")
+        _ensure_column(c,"renders","quality_score","REAL NOT NULL DEFAULT 0")
+        _ensure_column(c,"renders","quality_json","TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(c,"renders","is_best","INTEGER NOT NULL DEFAULT 0")
         c.commit()
 
 def q(sql: str, args=(), one=False):
@@ -123,12 +128,12 @@ def replace_clips(job_id: int, clips: list[dict[str, Any]]):
         c.execute("DELETE FROM clips WHERE job_id=?",(job_id,))
         for x in clips:
             c.execute("""INSERT INTO clips(job_id,start,end,score,reason,transcript,title,description,hashtags,
-              event_type,features_json,base_score,personal_score)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
+              event_type,features_json,base_score,personal_score,hook_text,best_variant)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
               job_id,x["start"],x["end"],x["score"],x.get("reason",""),x.get("transcript",""),
               x.get("title",""),x.get("description",""),x.get("hashtags",""),x.get("event_type","speech"),
               json.dumps(x.get("features",{}),separators=(",",":")),
-              x.get("base_score",x["score"]),x.get("personal_score",0)))
+              x.get("base_score",x["score"]),x.get("personal_score",0),x.get("hook_text",""),""))
         c.commit()
 
 def add_game_event(event_time: float, event_type: str, confidence: float=1.0,
@@ -148,14 +153,33 @@ def game_events_between(start_epoch: float, end_epoch: float) -> list[dict[str, 
     return rows
 
 def upsert_render(clip_id: int, variant: str, output_path: str,
-                  render_start: float, render_end: float, focus_mode: str):
-    exec_sql("""INSERT INTO renders(clip_id,variant,output_path,render_start,render_end,focus_mode,updated_at)
-                VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                  render_start: float, render_end: float, focus_mode: str,
+                  quality_score: float=0.0, quality: dict|None=None):
+    exec_sql("""INSERT INTO renders(clip_id,variant,output_path,render_start,render_end,focus_mode,
+                quality_score,quality_json,is_best,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP)
                 ON CONFLICT(clip_id,variant) DO UPDATE SET
                 output_path=excluded.output_path,render_start=excluded.render_start,
                 render_end=excluded.render_end,focus_mode=excluded.focus_mode,
-                updated_at=CURRENT_TIMESTAMP""",
-             (clip_id,variant,output_path,float(render_start),float(render_end),focus_mode))
+                quality_score=excluded.quality_score,quality_json=excluded.quality_json,
+                is_best=0,updated_at=CURRENT_TIMESTAMP""",
+             (clip_id,variant,output_path,float(render_start),float(render_end),focus_mode,
+              float(quality_score),json.dumps(quality or {},separators=(",",":"))))
+
+def choose_best_render(clip_id: int):
+    rows=q("SELECT * FROM renders WHERE clip_id=? ORDER BY quality_score DESC,id ASC",(clip_id,))
+    if not rows:
+        exec_sql("UPDATE clips SET best_variant='' WHERE id=?",(clip_id,))
+        return None
+    best=rows[0]
+    with _lock, _con() as c:
+        c.execute("UPDATE renders SET is_best=0 WHERE clip_id=?",(clip_id,))
+        c.execute("UPDATE renders SET is_best=1 WHERE id=?",(best["id"],))
+        c.execute("UPDATE clips SET best_variant=?,output_path=? WHERE id=?",
+                  (best["variant"],best["output_path"],clip_id))
+        c.commit()
+    best["is_best"]=1
+    return best
 
 def clip_renders(clip_id: int):
-    return q("SELECT * FROM renders WHERE clip_id=? ORDER BY id",(clip_id,))
+    return q("SELECT * FROM renders WHERE clip_id=? ORDER BY is_best DESC,quality_score DESC,id",(clip_id,))
