@@ -78,6 +78,16 @@ class Settings(BaseModel):
         "youtube": 0, "tiktok": 20, "instagram": 40
     })
 
+    # v0.8 audience analytics / self-improvement
+    analytics_enabled: bool = True
+    analytics_refresh_hours: float = 6.0
+    analytics_history_days: int = 90
+    analytics_collection_min_age_hours: float = 6.0
+    analytics_learning_enabled: bool = True
+    analytics_learning_weight: float = 0.35
+    analytics_learning_min_age_hours: float = 24.0
+    analytics_learning_min_views: int = 100
+
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = ""
     runelite_bridge_enabled: bool = True
