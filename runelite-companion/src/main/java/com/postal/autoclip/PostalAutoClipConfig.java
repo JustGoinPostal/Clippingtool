@@ -21,10 +21,17 @@ public interface PostalAutoClipConfig extends Config
     }
 
     @Range(min = 1, max = 120)
-    @ConfigItem(keyName = "bigHit", name = "Big hit threshold", description = "Send hits at or above this damage amount")
+    @ConfigItem(keyName = "bigHit", name = "Big hit threshold", description = "Send locally-attributed outgoing or incoming hits at or above this damage amount")
     default int bigHit()
     {
         return 35;
+    }
+
+    @Range(min = 1, max = 30)
+    @ConfigItem(keyName = "pvpKillWindowTicks", name = "PvP kill attribution window", description = "How many game ticks after your last confirmed damage on a player their death can count as your PvP kill")
+    default int pvpKillWindowTicks()
+    {
+        return 12;
     }
 
     @Range(min = 0, max = 100000000)
