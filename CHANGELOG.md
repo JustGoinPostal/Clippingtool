@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0
+
+- Added local publishing queue and scheduler.
+- Added YouTube Shorts uploads through the official YouTube Data API and OAuth `youtube.upload` scope.
+- Added a local YouTube connection flow using a Desktop OAuth client JSON stored under `secrets/`.
+- Added TikTok Direct Post FILE_UPLOAD integration using the official Content Posting API.
+- Added TikTok creator-info lookup so the dashboard uses the creator's current allowed privacy options.
+- Added TikTok asynchronous post-status polling through `/v2/post/publish/status/fetch/`.
+- Added queue states for queued, publishing, submitted, published, and failed posts.
+- Added automatic retry up to three attempts for upload failures.
+- Added Queue BEST workflow so the highest-scoring render can be scheduled without manually locating the file.
+- Added publish metadata fields for title, caption, hashtags, privacy, and schedule time.
+- Added published platform ID/URL tracking.
+- Added retry/remove controls in the dashboard.
+- Added `secrets/` and token files to `.gitignore`; OAuth credentials are never committed.
+- Added Instagram Reels as a clearly disabled/prepared adapter until a hosted public-video workflow and Meta account/app setup are configured.
+- Publishing remains opt-in: rendering a clip never posts it automatically.
+
 ## 0.5.0
 
 - Added automatic deterministic opening hooks for every candidate clip.
