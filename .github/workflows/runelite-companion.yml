@@ -23,4 +23,17 @@ jobs:
         with:
           gradle-version: '8.14.3'
       - name: Compile against current RuneLite API
-        run: gradle -p runelite-companion clean testClasses --no-daemon
+        run: gradle -p runelite-companion clean testClasses shadowJar --no-daemon
+      - name: Stage live-test package
+        run: |
+          mkdir -p runelite-live-test
+          cp runelite-companion/build/libs/PostalAutoClipCompanion-*-all.jar runelite-live-test/
+          cp runelite-companion/run-windows.bat runelite-live-test/
+          cp runelite-companion/LIVE_TEST.md runelite-live-test/
+      - name: Upload live-test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PostalAutoClip-RuneLite-Live-Test
+          path: runelite-live-test/
+          if-no-files-found: error
+          retention-days: 14
