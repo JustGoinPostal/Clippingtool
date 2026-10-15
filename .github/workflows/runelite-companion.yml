@@ -24,6 +24,14 @@ jobs:
           gradle-version: '8.14.3'
       - name: Compile against current RuneLite API
         run: gradle -p runelite-companion clean testClasses shadowJar --no-daemon
+      - name: Verify runnable package
+        shell: bash
+        run: |
+          JAR="$(ls runelite-companion/build/libs/PostalAutoClipCompanion-*-all.jar | head -n 1)"
+          test -s "$JAR"
+          jar tf "$JAR" | grep -q '^com/postal/autoclip/PostalAutoClipPlugin.class$'
+          jar tf "$JAR" | grep -q '^com/postal/autoclip/PostalAutoClipPluginTest.class$'
+          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -q '^Main-Class: com.postal.autoclip.PostalAutoClipPluginTest$'
       - name: Stage live-test package
         run: |
           mkdir -p runelite-live-test
