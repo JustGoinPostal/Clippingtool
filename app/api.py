@@ -19,6 +19,7 @@ from .publishing import (
 from .analytics import build_summary, collect_all, connect_youtube_analytics, youtube_analytics_status
 from .account_server import start_account_server
 from .debug_log import build_debug_report, debug_filename
+from .file_picker import pick_recording
 
 app=FastAPI(title="Postal AutoClip",version="0.9.0")
 app.mount("/static",StaticFiles(directory=ROOT/"app"/"static"),name="static")
@@ -52,6 +53,14 @@ def debug_log(job_id:int|None=None):
     text=build_debug_report(job_id)
     headers={"Content-Disposition":f'attachment; filename="{debug_filename(job_id)}"'}
     return PlainTextResponse(text,headers=headers,media_type="text/plain; charset=utf-8")
+
+@app.post("/api/browse-recording")
+def browse_recording(payload:dict=Body(default={})):
+    try:
+        path=pick_recording(str(payload.get("initial_dir") or ""))
+        return {"path":path,"cancelled":not bool(path)}
+    except Exception as e:
+        raise HTTPException(500,f"{type(e).__name__}: {e}")
 
 @app.get("/api/clips")
 def clips(job_id:int|None=None):
