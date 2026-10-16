@@ -15,6 +15,7 @@ from .media_time import recording_start_epoch
 from .osrs_events import map_events_to_recording
 from .hooks import generate_hook
 from .quality import evaluate_render
+from .debug_log import start_job_log, append_job_log, append_job_exception
 
 def _key(path: Path):
     st=path.stat()
@@ -25,53 +26,78 @@ def process_job(job_id: int):
     s=load_settings(); job=db.q("SELECT * FROM jobs WHERE id=?",(job_id,),one=True)
     if not job: return
     path=Path(job["source_path"])
-    def msg(text,prog=None):
+    start_job_log(job_id,str(path))
+    def msg(text,prog=None,level="INFO"):
         fields={"message":text}
         if prog is not None: fields["progress"]=prog
         db.update_job(job_id,**fields)
+        append_job_log(job_id,text,level=level)
     try:
         db.update_job(job_id,status="processing",progress=0.02,message="Probing video")
+        append_job_log(job_id,"Probing video")
         if not path.exists(): raise FileNotFoundError(path)
         key=_key(path); cache=s.cache_path/key; cache.mkdir(parents=True,exist_ok=True)
+        append_job_log(job_id,f"Cache key: {key}")
         d=duration(path); db.update_job(job_id,duration=d)
+        append_job_log(job_id,f"Video duration: {d:.3f} seconds")
         msg("Analyzing audio energy",0.07)
         energy_file=cache/"energy.txt"; energy_json=cache/"energy.json"
-        if energy_json.exists(): energy=json.loads(energy_json.read_text())
+        if energy_json.exists():
+            append_job_log(job_id,f"Using cached audio energy: {energy_json}")
+            energy=json.loads(energy_json.read_text())
         else:
             energy=audio_energy(path,energy_file); energy_json.write_text(json.dumps(energy))
+            append_job_log(job_id,f"Audio energy samples: {len(energy)}")
         msg("Scanning OSRS/game visuals",0.14)
         video_json=cache/"video_events.json"
-        if video_json.exists(): video=json.loads(video_json.read_text())
+        if video_json.exists():
+            append_job_log(job_id,f"Using cached visual analysis: {video_json}")
+            video=json.loads(video_json.read_text())
         else:
             video=analyze_video(path,d,s); video_json.write_text(json.dumps(video))
+            append_job_log(job_id,f"Visual samples: {len(video)}")
         msg("Transcribing stream",0.22)
         tx=transcribe(path,s,cache/"transcript.json",lambda x:msg(x,0.42))
+        append_job_log(job_id,f"Transcript segments: {len(tx.get('segments',[]))}; words: {len(tx.get('words',[]))}")
         msg("Mapping exact RuneLite events",0.64)
         game_events=[]
         if s.runelite_bridge_enabled:
             start_epoch,start_source=recording_start_epoch(path,d)
+            append_job_log(job_id,f"Recording start epoch: {start_epoch} ({start_source})")
             raw_events=db.game_events_between(start_epoch-8,start_epoch+d+8)
             game_events=map_events_to_recording(raw_events,start_epoch,d)
+            append_job_log(job_id,f"RuneLite events in recording window: raw={len(raw_events)} mapped={len(game_events)}")
             (cache/"runelite_events.json").write_text(
                 json.dumps({"recording_start_epoch":start_epoch,"source":start_source,"events":game_events},indent=2),
                 encoding="utf-8"
             )
+        else:
+            append_job_log(job_id,"RuneLite bridge disabled; skipping exact event mapping")
         msg("Learning your clip preferences",0.70)
         profile=learned_profile()
         msg("Scoring OSRS moments and de-duplicating",0.78)
         candidates=make_candidates(tx,energy,d,s,video=video,learned=profile,game_events=game_events)
+        append_job_log(job_id,f"Candidate clips after scoring/de-duplication: {len(candidates)}")
         msg("Running optional local AI second pass",0.88)
         candidates=local_ai_second_pass(candidates,s)
+        append_job_log(job_id,f"Candidate clips after local AI second pass: {len(candidates)}")
         for c in candidates:
             c["title"],c["description"],c["hashtags"]=make_metadata(c)
             if c.get("ai_title"): c["title"]=c["ai_title"]
             c["hook_text"]=generate_hook(c) if s.auto_hook_enabled else ""
         db.replace_clips(job_id,candidates)
-        db.update_job(job_id,status="ready",progress=1.0,
-                      message=f"Found {len(candidates)} diverse candidate clips")
+        done=f"Found {len(candidates)} diverse candidate clips"
+        db.update_job(job_id,status="ready",progress=1.0,message=done)
+        append_job_log(job_id,done)
+        append_job_log(job_id,"Analysis completed successfully")
     except Exception as e:
+        tb=traceback.format_exc()
         db.update_job(job_id,status="error",message=f"{type(e).__name__}: {e}")
-        (s.cache_path/f"job_{job_id}_error.txt").write_text(traceback.format_exc(),encoding="utf-8")
+        append_job_log(job_id,f"{type(e).__name__}: {e}",level="ERROR")
+        append_job_exception(job_id,tb)
+        error_path=s.cache_path/f"job_{job_id}_error.txt"
+        error_path.parent.mkdir(parents=True,exist_ok=True)
+        error_path.write_text(tb,encoding="utf-8")
 
 def render_clip_id(clip_id: int, variant: str|None=None):
     s=load_settings()
