@@ -127,6 +127,40 @@ def _source_summary(path_text: str) -> str:
         return f"exists=no/unreadable ({type(e).__name__}: {e})"
 
 
+def _source_stream_summary(path_text: str) -> str:
+    p = Path(path_text)
+    if not p.exists():
+        return "source missing"
+    try:
+        raw = subprocess.check_output([
+            "ffprobe", "-v", "error", "-show_streams", "-of", "json", str(p)
+        ], text=True, encoding="utf-8", errors="replace", timeout=12)
+        data = json.loads(raw)
+        rows=[]
+        for stream in data.get("streams", []):
+            row={
+                "index": stream.get("index"),
+                "codec_type": stream.get("codec_type"),
+                "codec_name": stream.get("codec_name"),
+            }
+            if stream.get("codec_type")=="video":
+                row.update({
+                    "width": stream.get("width"),
+                    "height": stream.get("height"),
+                    "pix_fmt": stream.get("pix_fmt"),
+                    "avg_frame_rate": stream.get("avg_frame_rate"),
+                })
+            elif stream.get("codec_type")=="audio":
+                row.update({
+                    "sample_rate": stream.get("sample_rate"),
+                    "channels": stream.get("channels"),
+                })
+            rows.append(row)
+        return json.dumps(rows, indent=2, sort_keys=True)
+    except Exception as e:
+        return f"unavailable: {type(e).__name__}: {e}"
+
+
 def build_debug_report(job_id: int | None = None) -> str:
     settings = load_settings()
     if job_id is not None:
@@ -170,13 +204,18 @@ def build_debug_report(job_id: int | None = None) -> str:
 
     for row in rows:
         jid = int(row["id"])
+        source_path=str(row.get("source_path") or "")
         lines.extend([
             "",
             "#" * 88,
             f"JOB {jid}",
             "#" * 88,
             json.dumps(_redact(row), indent=2, sort_keys=True, default=str),
-            f"source_file_check: {_source_summary(str(row.get('source_path') or ''))}",
+            f"source_file_check: {_source_summary(source_path)}",
+            "",
+            "SOURCE STREAMS (FFPROBE)",
+            "-" * 88,
+            _source_stream_summary(source_path),
             "",
             "ANALYSIS TIMELINE",
             "-" * 88,
