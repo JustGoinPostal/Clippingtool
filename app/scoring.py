@@ -128,6 +128,9 @@ def make_candidates(transcript: dict, energy: list[tuple[float,float]], total_du
         }
         exact_type = normalize_event_type((exact_event or {}).get("event_type", ""), (exact_event or {}).get("payload") or {}) if exact_event else ""
         exact_strength = event_strength(exact_event) if exact_event else 0.0
+        positive_signals=[max(0.0,ez),max(0.0,z["visual"]),max(0.0,z["center"]),max(0.0,z["red"]),max(0.0,z["purple"]),max(0.0,z["gold"])]
+        signal_hits=sum(1 for value in positive_signals if value>=1.0)
+        synergy=max(0.0,(signal_hits-1)*2.6)
         features={
             "keyword":min(1.0,kw/45.0),
             "audio":min(1.0,max(0.0,ez)/3.0),
@@ -141,11 +144,12 @@ def make_candidates(transcript: dict, energy: list[tuple[float,float]], total_du
             "red":min(1.0,max(max(0.0,z["red"])/3.0, vis["red_ratio"]/0.04)),
             "punctuation":1.0 if any(ch in text for ch in "!?") else 0.0,
             "runelite_event": min(1.0, exact_strength / 55.0),
+            "multi_signal":min(1.0,signal_hits/4.0),
         }
         base=(14 + kw + max(0,ez)*9 + max(0,density-1.7)*7 +
               max(0,z["visual"])*5 + max(0,z["chat"])*6 + max(0,z["ui"])*4 +
               max(0,z["center"])*4 + max(0,z["purple"])*8 + max(0,z["gold"])*5 +
-              max(0,z["red"])*3 + features["punctuation"]*3 + extra + exact_strength)
+              max(0,z["red"])*3 + features["punctuation"]*3 + extra + exact_strength + synergy)
         personal=preference_bonus(features,learned)
         event_type,tags=_classify(text,hits,features,z)
         event_summary=""
@@ -156,6 +160,7 @@ def make_candidates(transcript: dict, energy: list[tuple[float,float]], total_du
         reason=[]
         if hits: reason.append("keywords: "+", ".join(hits[:5]))
         if ez>0.8: reason.append(f"audio +{ez:.1f}σ")
+        if signal_hits>=2: reason.append(f"{signal_hits} excitement signals aligned")
         reason.extend(tags[:4])
         if density>2.2: reason.append("fast speech")
         if abs(personal)>=0.7: reason.append(f"your taste {personal:+.1f}")
@@ -211,6 +216,33 @@ def make_candidates(transcript: dict, energy: list[tuple[float,float]], total_du
                 z=(float(row.get(key,0))-mu)/sd
                 if z>=min_z:
                     candidates.append(build(float(row["time"]),label,extra=min(18,z*4)))
+
+        # Shorts usually feel strongest when several signals hit together. Seed candidates
+        # where motion, a reaction/audio spike, and damage/reward/UI changes coincide.
+        burst_rows=[]
+        for row in video:
+            t=float(row.get("time",0) or 0)
+            ez=(_energy_at(energy,t,2.5)-mean)/std
+            zvals={key:(float(row.get(key,0))-vstats[key][0])/vstats[key][1]
+                   for key in ("visual_change","chat_change","ui_change","center_change","purple_ratio","gold_ratio","red_ratio")}
+            action=max(0.0,zvals["visual_change"],zvals["center_change"],zvals["red_ratio"],
+                       zvals["purple_ratio"],zvals["gold_ratio"],
+                       zvals["chat_change"]*0.85,zvals["ui_change"]*0.85)
+            secondary=sorted([max(0.0,ez),max(0.0,zvals["visual_change"]),max(0.0,zvals["center_change"]),
+                              max(0.0,zvals["red_ratio"]),max(0.0,zvals["purple_ratio"]),max(0.0,zvals["gold_ratio"])],reverse=True)
+            multi_bonus=sum(1 for x in secondary if x>=1.0)*0.65
+            combined=action+max(0.0,ez)*0.80+multi_bonus
+            if combined>=2.65:
+                burst_rows.append((combined,t))
+        burst_rows.sort(reverse=True)
+        selected=[]
+        for combined,t in burst_rows:
+            if any(abs(t-prev)<4.0 for prev in selected):
+                continue
+            selected.append(t)
+            candidates.append(build(t,"multi-signal dynamic moment",extra=min(30.0,combined*6.2)))
+            if len(selected)>=max(12,s.max_candidates*2):
+                break
 
     candidates.sort(key=lambda x:x["score"],reverse=True)
     keep=[]; counts={}
