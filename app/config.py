@@ -41,6 +41,13 @@ class Settings(BaseModel):
     osrs_focus_panel_height: int = 700
     osrs_focus_margin: int = 50
 
+    # Keep a visible facecam in vertical edits without using it for clip scoring.
+    webcam_overlay_enabled: bool = True
+    webcam_region: str = "auto"  # auto, top_left, top_right, bottom_left, bottom_right
+    webcam_crop_width_ratio: float = 0.30
+    webcam_overlay_width: int = 390
+    webcam_overlay_y: int = 500
+
     caption_font: str = "Arial"
     caption_font_size: int = 76
     caption_words_per_group: int = 4
@@ -56,6 +63,8 @@ class Settings(BaseModel):
     dynamic_zoom_enabled: bool = True
     dynamic_zoom_strength: float = 0.16
     dynamic_zoom_seconds: float = 2.6
+    dynamic_beat_interval_seconds: float = 5.0
+    dynamic_beat_seconds: float = 1.15
     quality_scoring_enabled: bool = True
     best_variant_auto_select: bool = True
 
