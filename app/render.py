@@ -11,15 +11,18 @@ COMBAT_TYPES={"pvp","pvp_kill","death","player_death","big_hit","big_hit_taken",
 REWARD_TYPES={"drop","rare_drop","raid_reward","raid_complete","collection_log","loot","npc_loot"}
 WEBCAM_REGIONS=("top_left","top_right","bottom_left","bottom_right")
 
+
 def _ffmpeg_filter_path(p: Path):
     x=str(p.resolve()).replace("\\","/")
     return x.replace(":","\\:").replace("'","\\'")
+
 
 def _features(clip: dict) -> dict:
     raw=clip.get("features_json") or clip.get("features") or {}
     if isinstance(raw,dict): return raw
     try: return json.loads(raw)
     except Exception: return {}
+
 
 def focus_mode(clip: dict) -> str:
     event=str(clip.get("event_type") or "").lower()
@@ -34,6 +37,7 @@ def focus_mode(clip: dict) -> str:
         return "chat"
     return "center"
 
+
 def variant_window(clip: dict, variant: str, s: Settings) -> tuple[float,float]:
     start=float(clip["start"]); end=float(clip["end"])
     target=float(s.render_variants.get(variant,s.render_variants.get(s.primary_variant,end-start)))
@@ -44,6 +48,7 @@ def variant_window(clip: dict, variant: str, s: Settings) -> tuple[float,float]:
     if a<start: a=start; b=a+target
     if b>end: b=end; a=max(start,b-target)
     return a,b
+
 
 def tighten_dead_air(words: list[dict], start: float, end: float, clip: dict, s: Settings) -> tuple[float,float]:
     if not s.dead_air_trim_enabled or str(clip.get("event_type") or "") not in SPEECHY_TYPES:
@@ -59,6 +64,7 @@ def tighten_dead_air(words: list[dict], start: float, end: float, clip: dict, s:
         a=max(start,b-minimum)
     return a,b
 
+
 def _focus_crop(mode: str) -> str:
     if mode=="combat":
         return "crop=iw*0.62:ih*0.72:iw*0.10:ih*0.05"
@@ -68,11 +74,13 @@ def _focus_crop(mode: str) -> str:
         return "crop=iw*0.34:ih*0.86:iw*0.66:ih*0.04"
     return "crop=iw*0.66:ih*0.72:iw*0.08:ih*0.06"
 
+
 def _payoff_ratio(mode: str) -> float:
     if mode=="combat": return 0.60
     if mode=="chat": return 0.52
     if mode=="ui": return 0.55
     return 0.58
+
 
 def _focus_chain(mode: str, panel_w: int, panel_h: int, duration: float, s: Settings) -> str:
     crop=_focus_crop(mode)
@@ -107,6 +115,7 @@ def _focus_chain(mode: str, panel_w: int, panel_h: int, duration: float, s: Sett
     return (base+f",fps=30,zoompan=z='{z}':x='{x}':y='{y}':"
                  f"d=1:s={panel_w}x{panel_h}:fps=30")
 
+
 def _source_size(source: Path) -> tuple[int,int]:
     try:
         info=probe(source)
@@ -117,6 +126,7 @@ def _source_size(source: Path) -> tuple[int,int]:
     except Exception:
         pass
     return 1920,1080
+
 
 def _corner_box(region: str, width: int, height: int, ratio: float) -> tuple[int,int,int,int]:
     ratio=max(0.18,min(0.45,float(ratio)))
@@ -134,89 +144,152 @@ def _corner_box(region: str, width: int, height: int, ratio: float) -> tuple[int
         y=pad_y
     return x,y,crop_w,crop_h
 
-def _auto_webcam_region(source: Path, start: float, ratio: float) -> str:
-    """Guess a corner webcam using only color/motion/texture, never for clip scoring."""
-    sw,sh=320,180
+
+def _sample_frames(source: Path, start: float, seconds: float=3.2, sw: int=320, sh: int=180) -> list[np.ndarray]:
     try:
         cmd=["ffmpeg","-hide_banner","-loglevel","error","-ss",str(max(0.0,start)),"-i",str(source),
-             "-t","3.2","-vf",f"fps=1,scale={sw}:{sh}","-an","-pix_fmt","rgb24","-f","rawvideo","-"]
+             "-t",str(max(0.8,seconds)),"-vf",f"fps=1,scale={sw}:{sh}","-an","-pix_fmt","rgb24","-f","rawvideo","-"]
         raw=subprocess.check_output(cmd,stderr=subprocess.DEVNULL)
         frame_bytes=sw*sh*3
-        frames=[]
-        for i in range(0,len(raw)-frame_bytes+1,frame_bytes):
-            frames.append(np.frombuffer(raw[i:i+frame_bytes],dtype=np.uint8).reshape(sh,sw,3))
-        if not frames: return "top_right"
-        scores={}
-        for region in WEBCAM_REGIONS:
-            x,y,w,h=_corner_box(region,sw,sh,ratio)
-            patches=[f[y:y+h,x:x+w] for f in frames]
-            skin=[]; texture=[]
-            for p in patches:
-                rgb=p.astype(np.float32); r=rgb[:,:,0]; g=rgb[:,:,1]; b=rgb[:,:,2]
-                cb=128-0.168736*r-0.331264*g+0.5*b
-                cr=128+0.5*r-0.418688*g-0.081312*b
-                mask=(cb>=75)&(cb<=135)&(cr>=128)&(cr<=180)&(r>35)
-                skin.append(float(mask.mean()))
-                gray=0.299*r+0.587*g+0.114*b
-                texture.append(float(gray.std()/255.0))
-            motion=[]
-            for a,b in zip(patches,patches[1:]):
-                motion.append(float(np.abs(a.astype(np.int16)-b.astype(np.int16)).mean()/255.0))
-            scores[region]=(2.1*float(np.mean(skin))+
-                            1.35*(float(np.mean(motion)) if motion else 0.0)+
-                            0.18*float(np.mean(texture)))
-        return max(scores,key=scores.get)
+        return [np.frombuffer(raw[i:i+frame_bytes],dtype=np.uint8).reshape(sh,sw,3)
+                for i in range(0,len(raw)-frame_bytes+1,frame_bytes)]
     except Exception:
-        return "top_right"
+        return []
+
+
+def _score_webcam_regions(frames: list[np.ndarray], ratio: float) -> dict[str,float]:
+    if not frames: return {}
+    sh,sw=frames[0].shape[:2]
+    scores={}
+    for region in WEBCAM_REGIONS:
+        x,y,w,h=_corner_box(region,sw,sh,ratio)
+        patches=[f[y:y+h,x:x+w] for f in frames]
+        skin=[]; texture=[]
+        for p in patches:
+            rgb=p.astype(np.float32); r=rgb[:,:,0]; g=rgb[:,:,1]; b=rgb[:,:,2]
+            cb=128-0.168736*r-0.331264*g+0.5*b
+            cr=128+0.5*r-0.418688*g-0.081312*b
+            mask=(cb>=75)&(cb<=135)&(cr>=128)&(cr<=180)&(r>35)
+            skin.append(float(mask.mean()))
+            gray=0.299*r+0.587*g+0.114*b
+            texture.append(float(gray.std()/255.0))
+        motion=[float(np.abs(a.astype(np.int16)-b.astype(np.int16)).mean()/255.0)
+                for a,b in zip(patches,patches[1:])]
+        scores[region]=(2.1*float(np.mean(skin))+
+                        1.35*(float(np.mean(motion)) if motion else 0.0)+
+                        0.18*float(np.mean(texture)))
+    return scores
+
+
+def _auto_webcam_region(source: Path, start: float, ratio: float) -> str:
+    """Guess a corner webcam using only color/motion/texture, never for clip scoring."""
+    frames=_sample_frames(source,start)
+    scores=_score_webcam_regions(frames,ratio)
+    return max(scores,key=scores.get) if scores else "top_right"
+
+
+def _resolved_webcam_region(source: Path, start: float, s: Settings) -> str:
+    region=str(s.webcam_region or "auto").lower()
+    if region not in WEBCAM_REGIONS:
+        region=_auto_webcam_region(source,start,float(s.webcam_crop_width_ratio))
+    return region
+
 
 def _webcam_crop(source: Path, start: float, s: Settings) -> tuple[str,str]|None:
     if not s.webcam_overlay_enabled:
         return None
-    region=str(s.webcam_region or "auto").lower()
-    if region not in WEBCAM_REGIONS:
-        region=_auto_webcam_region(source,start,float(s.webcam_crop_width_ratio))
+    region=_resolved_webcam_region(source,start,s)
     width,height=_source_size(source)
     x,y,w,h=_corner_box(region,width,height,float(s.webcam_crop_width_ratio))
     return region,f"crop={w}:{h}:{x}:{y}"
 
-def _osrs_focus_filter(source: Path, start: float, clip: dict, ass_path: str, s: Settings, duration: float) -> tuple[str,str]:
+
+def _reaction_only_source(source: Path, start: float, s: Settings, region: str) -> bool:
+    """Detect OBS scenes that are essentially black/static except for the facecam."""
+    frames=_sample_frames(source,start,seconds=3.2)
+    if not frames:
+        return False
+    sh,sw=frames[0].shape[:2]
+    x,y,w,h=_corner_box(region,sw,sh,float(s.webcam_crop_width_ratio))
+    active=[]; brightness=[]; texture=[]
+    for frame in frames:
+        rgb=frame.astype(np.float32)
+        gray=0.299*rgb[:,:,0]+0.587*rgb[:,:,1]+0.114*rgb[:,:,2]
+        mask=np.ones((sh,sw),dtype=bool)
+        mask[y:y+h,x:x+w]=False
+        outside=gray[mask]
+        if outside.size==0:
+            continue
+        active.append(float((outside>28).mean()))
+        brightness.append(float(outside.mean()))
+        texture.append(float(outside.std()))
+    if not active:
+        return False
+    active_mean=float(np.mean(active)); bright_mean=float(np.mean(brightness)); texture_mean=float(np.mean(texture))
+    return active_mean < 0.18 and (bright_mean < 36 or texture_mean < 32)
+
+
+def _reaction_filter(source: Path, start: float, ass_path: str, s: Settings, webcam: tuple[str,str]) -> tuple[str,str,str]:
+    rw,rh=int(s.render_width),int(s.render_height)
+    region,cam_crop=webcam
+    cam_w=min(rw-120,860)
+    cam_h=int(round(cam_w*9/16))
+    cam_y=max(210,int((rh-cam_h)*0.27))
+    graph=(
+        f"[0:v]split=2[bg][cam];"
+        f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},"
+        f"gblur=sigma=42,eq=brightness=-0.08:saturation=0.72[bg2];"
+        f"[cam]{cam_crop},scale={cam_w}:{cam_h}:force_original_aspect_ratio=increase,crop={cam_w}:{cam_h},"
+        f"drawbox=x=0:y=0:w=iw:h=ih:color=white@0.88:t=5[cam2];"
+        f"[bg2][cam2]overlay=(W-w)/2:{cam_y}[stage1];"
+        f"[stage1]ass='{ass_path}',setsar=1[v]"
+    )
+    return graph,region,"reaction"
+
+
+def _osrs_focus_filter(source: Path, start: float, clip: dict, ass_path: str, s: Settings, duration: float) -> tuple[str,str,str]:
     rw,rh=int(s.render_width),int(s.render_height)
     margin=max(20,int(s.osrs_focus_margin))
-    panel_h=max(420,min(int(s.osrs_focus_panel_height),rh-850))
+    panel_h=max(500,min(int(s.osrs_focus_panel_height),rh-760))
     panel_w=rw-margin*2
-    full_w=rw-margin*2
-    full_y=70
-    focus_y=760
+    focus_y=650
     mode=focus_mode(clip)
     focus_chain=_focus_chain(mode,panel_w,panel_h,duration,s)
     webcam=_webcam_crop(source,start,s)
+
     if webcam:
+        region,_=webcam
+        if _reaction_only_source(source,start,s,region):
+            return _reaction_filter(source,start,ass_path,s,webcam)
+
         region,cam_crop=webcam
         cam_w=max(260,min(int(s.webcam_overlay_width),rw-margin*2))
         cam_h=int(round(cam_w*9/16))
         cam_x=rw-margin-cam_w
-        cam_y=max(320,min(int(s.webcam_overlay_y),focus_y-cam_h//2))
+        cam_y=max(110,min(int(s.webcam_overlay_y)-180,focus_y-cam_h-40))
+        # Important: do not overlay the original full OBS frame. It already contains the
+        # webcam, so doing that and then adding the extracted cam creates a duplicate facecam.
         graph=(
-            f"[0:v]split=4[bg][full][focus][cam];"
-            f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},gblur=sigma=30[bg2];"
-            f"[full]scale={full_w}:-2:force_original_aspect_ratio=decrease[full2];"
+            f"[0:v]split=3[bg][focus][cam];"
+            f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},gblur=sigma=36[bg2];"
             f"[focus]{focus_chain},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.72:t=4[focus2];"
             f"[cam]{cam_crop},scale={cam_w}:{cam_h}:force_original_aspect_ratio=increase,crop={cam_w}:{cam_h},"
             f"drawbox=x=0:y=0:w=iw:h=ih:color=white@0.92:t=5[cam2];"
-            f"[bg2][full2]overlay=(W-w)/2:{full_y}[stage1];"
+            f"[bg2][cam2]overlay={cam_x}:{cam_y}[stage1];"
             f"[stage1][focus2]overlay=(W-w)/2:{focus_y}[stage2];"
-            f"[stage2][cam2]overlay={cam_x}:{cam_y},ass='{ass_path}'[v]"
+            f"[stage2]ass='{ass_path}',setsar=1[v]"
         )
-        return graph,region
+        return graph,region,"gameplay"
+
     graph=(
-        f"[0:v]split=3[bg][full][focus];"
-        f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},gblur=sigma=30[bg2];"
-        f"[full]scale={full_w}:-2:force_original_aspect_ratio=decrease[full2];"
+        f"[0:v]split=2[bg][focus];"
+        f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},gblur=sigma=36[bg2];"
         f"[focus]{focus_chain},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.72:t=4[focus2];"
-        f"[bg2][full2]overlay=(W-w)/2:{full_y}[stage1];"
-        f"[stage1][focus2]overlay=(W-w)/2:{focus_y},ass='{ass_path}'[v]"
+        f"[bg2][focus2]overlay=(W-w)/2:{focus_y}[stage1];"
+        f"[stage1]ass='{ass_path}',setsar=1[v]"
     )
-    return graph,""
+    return graph,"","gameplay"
+
 
 def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Settings,
                 variant: str|None=None, progress=None):
@@ -232,14 +305,15 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
     write_ass(words,start,end,ass,s,hook_text=hook_text)
     ap=_ffmpeg_filter_path(ass)
     webcam_region=""
+    render_mode=s.layout
 
     if s.layout=="center_crop":
         vf=(f"scale={s.render_width}:{s.render_height}:force_original_aspect_ratio=increase,"
-            f"crop={s.render_width}:{s.render_height},ass='{ap}'")
+            f"crop={s.render_width}:{s.render_height},ass='{ap}',setsar=1")
         cmd=["ffmpeg","-hide_banner","-loglevel","warning","-y","-ss",str(start),"-i",str(source),
              "-t",str(dur),"-vf",vf]
     elif s.layout=="osrs_focus":
-        fc,webcam_region=_osrs_focus_filter(source,start,clip,ap,s,dur)
+        fc,webcam_region,render_mode=_osrs_focus_filter(source,start,clip,ap,s,dur)
         cmd=["ffmpeg","-hide_banner","-loglevel","warning","-y","-ss",str(start),"-i",str(source),
              "-t",str(dur),"-filter_complex",fc,"-map","[v]","-map","0:a?"]
     else:
@@ -247,17 +321,19 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
             f"[bg]scale={s.render_width}:{s.render_height}:force_original_aspect_ratio=increase,"
             f"crop={s.render_width}:{s.render_height},gblur=sigma=28[bg2];"
             f"[fg]scale={s.render_width}:-2:force_original_aspect_ratio=decrease[fg2];"
-            f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2,ass='{ap}'[v]")
+            f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2,ass='{ap}',setsar=1[v]")
         cmd=["ffmpeg","-hide_banner","-loglevel","warning","-y","-ss",str(start),"-i",str(source),
              "-t",str(dur),"-filter_complex",fc,"-map","[v]","-map","0:a?"]
 
     cmd += ["-c:v","libx264","-preset","medium","-crf","20","-pix_fmt","yuv420p",
             "-c:a","aac","-b:a","192k","-movflags","+faststart",str(output)]
     if progress:
-        progress(f"Rendering {variant} vertical clip")
+        progress(f"Rendering {variant} vertical clip ({render_mode})")
     subprocess.run(cmd,check=True)
     return {"path":output,"variant":variant,"start":start,"end":end,"duration":dur,
             "focus":focus_mode(clip),"hook_text":hook_text,
             "dynamic_zoom":bool(s.dynamic_zoom_enabled and s.layout=="osrs_focus"),
             "webcam_region":webcam_region,
-            "resolution":f"{int(s.render_width)}x{int(s.render_height)}"}
+            "render_mode":render_mode,
+            "resolution":f"{int(s.render_width)}x{int(s.render_height)}",
+            "sar":"1:1"}
