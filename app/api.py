@@ -2,7 +2,7 @@ from __future__ import annotations
 import threading, time
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from .config import ROOT, load_settings, save_settings
 from . import db
@@ -18,6 +18,7 @@ from .publishing import (
 )
 from .analytics import build_summary, collect_all, connect_youtube_analytics, youtube_analytics_status
 from .account_server import start_account_server
+from .debug_log import build_debug_report, debug_filename
 
 app=FastAPI(title="Postal AutoClip",version="0.9.0")
 app.mount("/static",StaticFiles(directory=ROOT/"app"/"static"),name="static")
@@ -43,6 +44,14 @@ def status():
 
 @app.get("/api/jobs")
 def jobs(): return db.q("SELECT * FROM jobs ORDER BY id DESC LIMIT 100")
+
+@app.get("/api/debug/log")
+def debug_log(job_id:int|None=None):
+    if job_id is not None and not db.q("SELECT id FROM jobs WHERE id=?",(job_id,),one=True):
+        raise HTTPException(404,"Job not found")
+    text=build_debug_report(job_id)
+    headers={"Content-Disposition":f'attachment; filename="{debug_filename(job_id)}"'}
+    return PlainTextResponse(text,headers=headers,media_type="text/plain; charset=utf-8")
 
 @app.get("/api/clips")
 def clips(job_id:int|None=None):
