@@ -18,11 +18,23 @@ def duration(path: Path) -> float:
     try: return float(d.get("format",{}).get("duration",0))
     except Exception: return 0.0
 
+def _filter_filename(path: Path) -> str:
+    """Escape a filename for use inside a quoted FFmpeg filter option.
+
+    FFmpeg's filter parser treats ':' as an option separator even on Windows,
+    so a drive path such as C:/PostalAutoClip/... must become C\:/PostalAutoClip/....
+    """
+    value=str(path).replace("\\", "/")
+    return value.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
 def audio_energy(path: Path, out_txt: Path) -> list[tuple[float,float]]:
     require_ffmpeg(); out_txt.parent.mkdir(parents=True, exist_ok=True)
+    try: out_txt.unlink(missing_ok=True)
+    except Exception: pass
+    metadata_file=_filter_filename(out_txt)
     filt=("aresample=8000,asetnsamples=n=16000:p=0,"
           "astats=metadata=1:reset=1,"
-          f"ametadata=print:key=lavfi.astats.Overall.RMS_level:file='{str(out_txt).replace(chr(92),'/')}'")
+          f"ametadata=print:key=lavfi.astats.Overall.RMS_level:file='{metadata_file}'")
     cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(path),"-vn","-af",filt,"-f","null","-"]
     subprocess.run(cmd, check=True)
     values=[]; t=None
