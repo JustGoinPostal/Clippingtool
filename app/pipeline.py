@@ -7,7 +7,7 @@ from .media import duration, audio_energy
 from .transcribe import transcribe
 from .scoring import make_candidates
 from .metadata import make_metadata
-from .render import render_clip
+from .render_fullscreen import render_clip
 from .video_events import analyze_video
 from .learning import learned_profile
 from .ranker import local_ai_second_pass
