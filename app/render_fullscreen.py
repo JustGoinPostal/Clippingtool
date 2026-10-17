@@ -8,7 +8,6 @@ from .config import Settings
 from .media import require_ffmpeg
 from .render import (
     _ffmpeg_filter_path,
-    _focus_chain,
     _reaction_filter,
     _reaction_only_source,
     _webcam_crop,
@@ -19,15 +18,72 @@ from .render import (
 )
 
 
+def _shorts_focus_mode(clip: dict) -> str:
+    """Shorts never frame OSRS chat/UI as the subject; only gameplay gets the main frame."""
+    mode = focus_mode(clip)
+    return "combat" if mode == "combat" else "center"
+
+
+def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Settings) -> str:
+    """Create a full-height 9:16 gameplay crop that deliberately excludes lower-left chat.
+
+    The crop is shifted slightly right of source center before scaling. Dynamic motion is
+    applied only after that crop, so zoom/pan can never wander back into the OSRS chat box.
+    """
+    # A 9:16 slice based on source height. 0.62 of the available horizontal travel keeps
+    # the player/gameplay area while excluding the left-side OSRS chat in normal OBS layouts.
+    base = (
+        "crop="
+        "w='trunc(ih*9/16/2)*2':"
+        "h='trunc(ih/2)*2':"
+        "x='(iw-ow)*0.62':y=0,"
+        f"scale={width}:{height}:flags=lanczos"
+    )
+    if not s.dynamic_zoom_enabled or duration < 2.0:
+        return base
+
+    fps = 30.0
+    strength = max(0.0, min(0.24, float(s.dynamic_zoom_strength)))
+    if mode == "combat":
+        strength = min(0.26, strength * 1.18)
+    interval = max(3.5, float(s.dynamic_beat_interval_seconds))
+    beat = max(0.7, min(float(s.dynamic_beat_seconds), interval * 0.45))
+    interval_f = max(2, int(round(interval * fps)))
+    beat_f = max(1, int(round(beat * fps)))
+    pulse = max(0.022, min(0.055, strength * 0.24))
+    payoff_mid = int(round(duration * 0.60 * fps))
+    payoff_half = max(1, int(round(min(float(s.dynamic_zoom_seconds), duration * 0.45) * fps / 2)))
+    payoff_start = max(0, payoff_mid - payoff_half)
+    payoff_end = max(payoff_start + 1, payoff_mid + payoff_half)
+
+    beat_expr = (
+        f"if(lt(mod(on,{interval_f}),{beat_f}),"
+        f"sin(PI*mod(on,{interval_f})/{beat_f}),0)"
+    )
+    payoff_expr = (
+        f"if(between(on,{payoff_start},{payoff_end}),"
+        f"max(0,1-abs(on-{payoff_mid})/{payoff_half}),0)"
+    )
+    z = f"min(1.28,1+{pulse:.4f}*({beat_expr})+{strength:.4f}*({payoff_expr}))"
+    # Motion stays inside the already chat-free vertical crop.
+    x = "iw/2-(iw/zoom/2)+sin(on/65)*(iw-iw/zoom)*0.08"
+    y = "ih/2-(ih/zoom/2)+cos(on/80)*(ih-ih/zoom)*0.05"
+    return (
+        base
+        + f",fps=30,zoompan=z='{z}':x='{x}':y='{y}':"
+          f"d=1:s={width}x{height}:fps=30"
+    )
+
+
 def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
                       s: Settings, duration: float) -> tuple[str, str, str]:
     """Fill the entire 9:16 Short with gameplay, optionally overlaying a real webcam."""
     rw, rh = int(s.render_width), int(s.render_height)
-    mode = focus_mode(clip)
-    game_chain = _focus_chain(mode, rw, rh, duration, s)
+    mode = _shorts_focus_mode(clip)
+    game_chain = _gameplay_chain(mode, rw, rh, duration, s)
     webcam = _webcam_crop(source, start, s)
 
-    # If the source truly contains no meaningful gameplay, keep the existing reaction layout.
+    # If the source truly contains no meaningful gameplay, keep the reaction-only fallback.
     if webcam:
         region, _ = webcam
         if _reaction_only_source(source, start, s, region):
@@ -37,8 +93,8 @@ def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
         region, cam_crop = webcam
         cam_w = max(300, min(int(s.webcam_overlay_width), int(rw * 0.42)))
         cam_h = int(round(cam_w * 9 / 16))
-        cam_x = rw - cam_w - 42
-        cam_y = 72
+        cam_x = (rw - cam_w) // 2
+        cam_y = 54
         graph = (
             f"[0:v]split=2[game][cam];"
             f"[game]{game_chain}[game2];"
@@ -49,15 +105,13 @@ def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
         )
         return graph, region, "gameplay_fullscreen"
 
-    graph = (
-        f"[0:v]{game_chain},ass='{ass_path}',setsar=1[v]"
-    )
+    graph = f"[0:v]{game_chain},ass='{ass_path}',setsar=1[v]"
     return graph, "", "gameplay_fullscreen"
 
 
 def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Settings,
                 variant: str | None = None, progress=None):
-    """Shorts renderer: full-frame gameplay first, webcam only as an overlay."""
+    """Shorts renderer: full-frame gameplay first, top-center webcam only as an overlay."""
     if s.layout != "osrs_focus":
         return _legacy_render_clip(source, clip, words, output, s, variant=variant, progress=progress)
 
@@ -91,11 +145,13 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
         "start": start,
         "end": end,
         "duration": dur,
-        "focus": focus_mode(clip),
+        "focus": mode if (mode := _shorts_focus_mode(clip)) else "center",
         "hook_text": hook_text,
         "dynamic_zoom": bool(s.dynamic_zoom_enabled),
         "webcam_region": webcam_region,
+        "webcam_position": "top_center" if webcam_region else "",
         "render_mode": render_mode,
         "resolution": f"{int(s.render_width)}x{int(s.render_height)}",
         "sar": "1:1",
+        "chat_visible": False,
     }
