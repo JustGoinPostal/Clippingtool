@@ -1,7 +1,7 @@
 import numpy as np
 from app.config import Settings
 from app import render
-from app.render import _corner_box, _focus_chain
+from app.render import _corner_box, _focus_chain, _focus_crop, _pick_webcam_region
 
 
 def test_short_defaults_are_vertical_1080p():
@@ -43,3 +43,19 @@ def test_normal_gameplay_scene_does_not_switch_to_reaction(monkeypatch):
     frame = np.full((180, 320, 3), 90, dtype=np.uint8)
     monkeypatch.setattr(render, "_sample_frames", lambda *args, **kwargs: [frame.copy(), frame.copy()])
     assert render._reaction_only_source(None, 0.0, s, "top_right") is False
+
+
+def test_ambiguous_webcam_scores_are_rejected():
+    scores={"top_left":0.10,"top_right":0.11,"bottom_left":0.09,"bottom_right":0.08}
+    assert _pick_webcam_region(scores) is None
+
+
+def test_clear_webcam_score_is_selected():
+    scores={"top_left":0.18,"top_right":0.52,"bottom_left":0.07,"bottom_right":0.03}
+    assert _pick_webcam_region(scores) == "top_right"
+
+
+def test_center_crop_avoids_outer_left_overlay_area():
+    crop=_focus_crop("center")
+    assert "iw*0.12" in crop
+    assert "iw*0.76" in crop
