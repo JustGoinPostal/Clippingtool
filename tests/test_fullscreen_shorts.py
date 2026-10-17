@@ -13,9 +13,10 @@ def test_fullscreen_gameplay_uses_entire_vertical_frame(monkeypatch):
     assert "scale=1080:1920" in graph
     assert "gblur" not in graph
     assert "overlay=" not in graph
+    assert "(iw-ow)*0.62" in graph
 
 
-def test_fullscreen_gameplay_only_adds_webcam_as_overlay(monkeypatch):
+def test_fullscreen_gameplay_puts_webcam_top_center(monkeypatch):
     s = Settings(layout="osrs_focus")
     monkeypatch.setattr(render_fullscreen, "_webcam_crop", lambda *args, **kwargs: ("top_right", "crop=320:180:900:20"))
     monkeypatch.setattr(render_fullscreen, "_reaction_only_source", lambda *args, **kwargs: False)
@@ -25,5 +26,18 @@ def test_fullscreen_gameplay_only_adds_webcam_as_overlay(monkeypatch):
     assert mode == "gameplay_fullscreen"
     assert region == "top_right"
     assert "scale=1080:1920" in graph
-    assert "overlay=" in graph
+    assert "overlay=345:54" in graph
     assert "gblur" not in graph
+
+
+def test_reward_and_chat_signals_never_frame_osrs_chat():
+    assert render_fullscreen._shorts_focus_mode({"event_type": "drop", "features_json": "{}"}) == "center"
+    assert render_fullscreen._shorts_focus_mode({"event_type": "chat", "features_json": "{}"}) == "center"
+    assert render_fullscreen._shorts_focus_mode({"event_type": "speech", "features_json": '{"chat_change": 1.0}'}) == "center"
+
+
+def test_gameplay_crop_happens_before_dynamic_motion():
+    s = Settings(layout="osrs_focus", dynamic_zoom_enabled=True)
+    chain = render_fullscreen._gameplay_chain("center", 1080, 1920, 22.0, s)
+    assert chain.index("crop=") < chain.index("zoompan")
+    assert "x='(iw-ow)*0.62'" in chain
