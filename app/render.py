@@ -66,13 +66,14 @@ def tighten_dead_air(words: list[dict], start: float, end: float, clip: dict, s:
 
 
 def _focus_crop(mode: str) -> str:
+    # Keep the action area while avoiding common stream/logo overlays along the outer edges.
     if mode=="combat":
-        return "crop=iw*0.62:ih*0.72:iw*0.10:ih*0.05"
+        return "crop=iw*0.70:ih*0.74:iw*0.15:ih*0.06"
     if mode=="chat":
-        return "crop=iw*0.72:ih*0.43:0:ih*0.57"
+        return "crop=iw*0.70:ih*0.42:iw*0.03:ih*0.56"
     if mode=="ui":
-        return "crop=iw*0.34:ih*0.86:iw*0.66:ih*0.04"
-    return "crop=iw*0.66:ih*0.72:iw*0.08:ih*0.06"
+        return "crop=iw*0.32:ih*0.84:iw*0.67:ih*0.05"
+    return "crop=iw*0.76:ih*0.74:iw*0.12:ih*0.06"
 
 
 def _payoff_ratio(mode: str) -> float:
@@ -158,47 +159,72 @@ def _sample_frames(source: Path, start: float, seconds: float=3.2, sw: int=320, 
 
 
 def _score_webcam_regions(frames: list[np.ndarray], ratio: float) -> dict[str,float]:
+    """Score webcam-like corners while strongly penalizing static beige/white UI panels."""
     if not frames: return {}
     sh,sw=frames[0].shape[:2]
     scores={}
     for region in WEBCAM_REGIONS:
         x,y,w,h=_corner_box(region,sw,sh,ratio)
         patches=[f[y:y+h,x:x+w] for f in frames]
-        skin=[]; texture=[]
+        skin=[]; texture=[]; saturation=[]; neutral_light=[]; edge_density=[]
         for p in patches:
             rgb=p.astype(np.float32); r=rgb[:,:,0]; g=rgb[:,:,1]; b=rgb[:,:,2]
             cb=128-0.168736*r-0.331264*g+0.5*b
             cr=128+0.5*r-0.418688*g-0.081312*b
-            mask=(cb>=75)&(cb<=135)&(cr>=128)&(cr<=180)&(r>35)
-            skin.append(float(mask.mean()))
+            skin_mask=(cb>=75)&(cb<=135)&(cr>=128)&(cr<=180)&(r>35)
+            skin.append(float(skin_mask.mean()))
+            hi=np.max(rgb,axis=2); lo=np.min(rgb,axis=2)
+            sat=(hi-lo)/(hi+1.0)
+            saturation.append(float(sat.mean()))
             gray=0.299*r+0.587*g+0.114*b
             texture.append(float(gray.std()/255.0))
+            neutral_light.append(float(((sat<0.16)&(gray>105)).mean()))
+            gx=np.abs(np.diff(gray,axis=1)); gy=np.abs(np.diff(gray,axis=0))
+            edge=(float((gx>24).mean())+float((gy>24).mean()))/2.0
+            edge_density.append(edge)
         motion=[float(np.abs(a.astype(np.int16)-b.astype(np.int16)).mean()/255.0)
                 for a,b in zip(patches,patches[1:])]
-        scores[region]=(2.1*float(np.mean(skin))+
-                        1.35*(float(np.mean(motion)) if motion else 0.0)+
-                        0.18*float(np.mean(texture)))
+        skin_m=float(np.mean(skin)); motion_m=float(np.mean(motion)) if motion else 0.0
+        sat_m=float(np.mean(saturation)); texture_m=float(np.mean(texture))
+        neutral_m=float(np.mean(neutral_light)); edge_m=float(np.mean(edge_density))
+        scores[region]=(2.4*skin_m + 3.2*motion_m + 0.75*sat_m + 0.22*texture_m
+                        - 1.7*neutral_m - 0.55*edge_m)
     return scores
 
 
-def _auto_webcam_region(source: Path, start: float, ratio: float) -> str:
-    """Guess a corner webcam using only color/motion/texture, never for clip scoring."""
+def _pick_webcam_region(scores: dict[str,float]) -> str|None:
+    if not scores:
+        return None
+    ranked=sorted(scores.items(),key=lambda kv:kv[1],reverse=True)
+    best_region,best=ranked[0]
+    second=ranked[1][1] if len(ranked)>1 else -999.0
+    # A low/ambiguous result is worse than omitting the facecam; this prevents OSRS chat
+    # boxes and inventory panels from being promoted as a fake webcam card.
+    if best < 0.12:
+        return None
+    if best < 0.30 and best-second < 0.045:
+        return None
+    return best_region
+
+
+def _auto_webcam_region(source: Path, start: float, ratio: float) -> str|None:
     frames=_sample_frames(source,start)
-    scores=_score_webcam_regions(frames,ratio)
-    return max(scores,key=scores.get) if scores else "top_right"
+    return _pick_webcam_region(_score_webcam_regions(frames,ratio))
 
 
-def _resolved_webcam_region(source: Path, start: float, s: Settings) -> str:
+def _resolved_webcam_region(source: Path, start: float, s: Settings) -> str|None:
     region=str(s.webcam_region or "auto").lower()
-    if region not in WEBCAM_REGIONS:
-        region=_auto_webcam_region(source,start,float(s.webcam_crop_width_ratio))
-    return region
+    if region in WEBCAM_REGIONS:
+        return region
+    return _auto_webcam_region(source,start,float(s.webcam_crop_width_ratio))
 
 
 def _webcam_crop(source: Path, start: float, s: Settings) -> tuple[str,str]|None:
     if not s.webcam_overlay_enabled:
         return None
     region=_resolved_webcam_region(source,start,s)
+    if region is None:
+        return None
     width,height=_source_size(source)
     x,y,w,h=_corner_box(region,width,height,float(s.webcam_crop_width_ratio))
     return region,f"crop={w}:{h}:{x}:{y}"
@@ -232,9 +258,9 @@ def _reaction_only_source(source: Path, start: float, s: Settings, region: str) 
 def _reaction_filter(source: Path, start: float, ass_path: str, s: Settings, webcam: tuple[str,str]) -> tuple[str,str,str]:
     rw,rh=int(s.render_width),int(s.render_height)
     region,cam_crop=webcam
-    cam_w=min(rw-120,860)
+    cam_w=min(rw-100,900)
     cam_h=int(round(cam_w*9/16))
-    cam_y=max(210,int((rh-cam_h)*0.27))
+    cam_y=max(190,int((rh-cam_h)*0.24))
     graph=(
         f"[0:v]split=2[bg][cam];"
         f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},"
@@ -250,9 +276,8 @@ def _reaction_filter(source: Path, start: float, ass_path: str, s: Settings, web
 def _osrs_focus_filter(source: Path, start: float, clip: dict, ass_path: str, s: Settings, duration: float) -> tuple[str,str,str]:
     rw,rh=int(s.render_width),int(s.render_height)
     margin=max(20,int(s.osrs_focus_margin))
-    panel_h=max(500,min(int(s.osrs_focus_panel_height),rh-760))
     panel_w=rw-margin*2
-    focus_y=650
+    panel_h=max(760,min(max(int(s.osrs_focus_panel_height),820),rh-650))
     mode=focus_mode(clip)
     focus_chain=_focus_chain(mode,panel_w,panel_h,duration,s)
     webcam=_webcam_crop(source,start,s)
@@ -263,28 +288,33 @@ def _osrs_focus_filter(source: Path, start: float, clip: dict, ass_path: str, s:
             return _reaction_filter(source,start,ass_path,s,webcam)
 
         region,cam_crop=webcam
-        cam_w=max(260,min(int(s.webcam_overlay_width),rw-margin*2))
+        focus_y=430
+        cam_w=max(300,min(int(s.webcam_overlay_width),rw-margin*2))
         cam_h=int(round(cam_w*9/16))
-        cam_x=rw-margin-cam_w
-        cam_y=max(110,min(int(s.webcam_overlay_y)-180,focus_y-cam_h-40))
-        # Important: do not overlay the original full OBS frame. It already contains the
-        # webcam, so doing that and then adding the extracted cam creates a duplicate facecam.
+        cam_x=(rw-cam_w)//2
+        cam_y=110
         graph=(
             f"[0:v]split=3[bg][focus][cam];"
-            f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},gblur=sigma=36[bg2];"
-            f"[focus]{focus_chain},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.72:t=4[focus2];"
+            f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},"
+            f"gblur=sigma=40,eq=brightness=-0.04:saturation=0.82[bg2];"
+            f"[focus]{focus_chain},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.70:t=4[focus2];"
             f"[cam]{cam_crop},scale={cam_w}:{cam_h}:force_original_aspect_ratio=increase,crop={cam_w}:{cam_h},"
-            f"drawbox=x=0:y=0:w=iw:h=ih:color=white@0.92:t=5[cam2];"
+            f"drawbox=x=0:y=0:w=iw:h=ih:color=white@0.90:t=5[cam2];"
             f"[bg2][cam2]overlay={cam_x}:{cam_y}[stage1];"
             f"[stage1][focus2]overlay=(W-w)/2:{focus_y}[stage2];"
             f"[stage2]ass='{ass_path}',setsar=1[v]"
         )
         return graph,region,"gameplay"
 
+    # No reliable webcam: use the space for gameplay instead of showing a random UI crop.
+    focus_y=250
+    panel_h=max(panel_h,980)
+    focus_chain=_focus_chain(mode,panel_w,panel_h,duration,s)
     graph=(
         f"[0:v]split=2[bg][focus];"
-        f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},gblur=sigma=36[bg2];"
-        f"[focus]{focus_chain},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.72:t=4[focus2];"
+        f"[bg]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},"
+        f"gblur=sigma=40,eq=brightness=-0.04:saturation=0.82[bg2];"
+        f"[focus]{focus_chain},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.70:t=4[focus2];"
         f"[bg2][focus2]overlay=(W-w)/2:{focus_y}[stage1];"
         f"[stage1]ass='{ass_path}',setsar=1[v]"
     )
