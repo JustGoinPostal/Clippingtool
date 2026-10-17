@@ -67,8 +67,14 @@ def clips(job_id:int|None=None):
     base="""SELECT clips.*,jobs.source_path,jobs.duration AS job_duration,
       (SELECT group_concat(variant, ',') FROM renders WHERE renders.clip_id=clips.id) AS rendered_variants
       FROM clips JOIN jobs ON jobs.id=clips.job_id"""
-    if job_id is None: return db.q(base+" ORDER BY score DESC LIMIT 250")
-    return db.q(base+" WHERE clips.job_id=? ORDER BY score DESC",(job_id,))
+    if job_id is None: return db.q(base+" WHERE clips.status!='archived' ORDER BY score DESC LIMIT 250")
+    return db.q(base+" WHERE clips.job_id=? AND clips.status!='archived' ORDER BY score DESC",(job_id,))
+
+@app.post("/api/clips/archive-all")
+def archive_all_clips():
+    row=db.q("SELECT COUNT(*) AS n FROM clips WHERE status!='archived'",one=True) or {"n":0}
+    db.exec_sql("UPDATE clips SET status='archived' WHERE status!='archived'")
+    return {"ok":True,"archived":int(row.get("n") or 0)}
 
 @app.get("/api/clips/{clip_id}")
 def clip_detail(clip_id:int):
@@ -76,6 +82,13 @@ def clip_detail(clip_id:int):
                 FROM clips JOIN jobs ON jobs.id=clips.job_id WHERE clips.id=?""",(clip_id,),one=True)
     if not row: raise HTTPException(404,"Clip not found")
     row["renders"]=db.clip_renders(clip_id); return row
+
+@app.post("/api/clips/{clip_id}/archive")
+def archive_clip(clip_id:int):
+    row=db.q("SELECT id,status FROM clips WHERE id=?",(clip_id,),one=True)
+    if not row: raise HTTPException(404,"Clip not found")
+    db.exec_sql("UPDATE clips SET status='archived' WHERE id=?",(clip_id,))
+    return {"ok":True,"clip_id":clip_id,"previous_status":row.get("status") or "candidate"}
 
 @app.patch("/api/clips/{clip_id}")
 def edit_clip(clip_id:int,payload:dict=Body(...)):
