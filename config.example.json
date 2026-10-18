@@ -84,6 +84,7 @@
   "targeted_video_post_seconds": 28.0,
   "targeted_video_audio_z": 1.35,
   "targeted_video_merge_gap_seconds": 6.0,
+  "targeted_video_max_window_seconds": 120.0,
   "targeted_video_max_windows": 80,
   "smart_boundaries": true,
   "diversity_per_type": 6,
