@@ -8,7 +8,27 @@ from .config import Settings
 from .osrs_events import event_strength, normalize_event_type
 
 
-def _merge_windows(windows: list[dict[str, Any]], duration: float, gap: float, limit: int) -> list[dict[str, Any]]:
+def _split_long_window(row: dict[str, Any], max_seconds: float) -> list[dict[str, Any]]:
+    start=float(row["start"]); end=float(row["end"])
+    max_seconds=max(10.0,float(max_seconds))
+    if end-start <= max_seconds:
+        return [row]
+    out=[]; cursor=start
+    while cursor < end:
+        chunk_end=min(end,cursor+max_seconds)
+        x=dict(row); x["start"]=cursor; x["end"]=chunk_end
+        out.append(x)
+        cursor=chunk_end
+    return out
+
+
+def _merge_windows(
+    windows: list[dict[str, Any]],
+    duration: float,
+    gap: float,
+    limit: int,
+    max_window_seconds: float,
+) -> list[dict[str, Any]]:
     if not windows or duration <= 0:
         return []
     normalized=[]
@@ -34,6 +54,12 @@ def _merge_windows(windows: list[dict[str, Any]], duration: float, gap: float, l
             merged[-1]["sources"].update(row["sources"])
         else:
             merged.append(row)
+
+    bounded=[]
+    for row in merged:
+        bounded.extend(_split_long_window(row,max_window_seconds))
+    merged=bounded
+
     if len(merged) > limit:
         keep=sorted(merged,key=lambda x:(x["priority"],x["end"]-x["start"]),reverse=True)[:limit]
         merged=sorted(keep,key=lambda x:x["start"])
@@ -45,6 +71,33 @@ def _merge_windows(windows: list[dict[str, Any]], duration: float, gap: float, l
             "sources":sorted(x["sources"]),
         }
         for x in merged
+    ]
+
+
+def _runelite_candidates(game_events: list[dict], duration: float, s: Settings) -> list[dict[str, Any]]:
+    ranked=[]
+    for ev in game_events:
+        typ=normalize_event_type(ev.get("event_type",""),ev.get("payload") or {})
+        if typ.startswith("bridge_"):
+            continue
+        t=float(ev.get("time",0.0) or 0.0)
+        if not (0.0 <= t <= duration):
+            continue
+        strength=float(ev.get("strength",event_strength(ev)) or 0.0)
+        ranked.append((strength,t,typ,ev))
+    ranked.sort(reverse=True,key=lambda x:x[0])
+
+    chosen=[]; seen=[]
+    max_events=max(60,int(s.max_candidates)*5)
+    for strength,t,typ,ev in ranked:
+        if any(typ==seen_type and abs(t-seen_t)<2.5 for seen_t,seen_type in seen):
+            continue
+        seen.append((t,typ)); chosen.append((strength,t,typ,ev))
+        if len(chosen)>=max_events:
+            break
+    return [
+        {"strength":strength,"time":t,"type":typ,"event":ev}
+        for strength,t,typ,ev in chosen
     ]
 
 
@@ -68,17 +121,18 @@ def build_interest_windows(
     post=max(4.0,float(s.targeted_video_post_seconds))
     windows: list[dict[str, Any]]=[]
 
-    for ev in game_events:
-        typ=normalize_event_type(ev.get("event_type",""),ev.get("payload") or {})
-        if typ.startswith("bridge_"):
-            continue
-        t=float(ev.get("time",0.0) or 0.0)
-        if not (0.0 <= t <= duration):
-            continue
-        strength=float(ev.get("strength",event_strength(ev)) or 0.0)
+    for row in _runelite_candidates(game_events,duration,s):
+        t=float(row["time"]); typ=str(row["type"]); strength=float(row["strength"])
+        # Frequent hits need less context than a kill, death, unique, or raid reward.
+        if typ in {"big_hit","big_hit_taken"}:
+            ev_pre=min(pre,8.0); ev_post=min(post,12.0)
+        elif typ in {"npc_loot","loot"}:
+            ev_pre=min(pre,10.0); ev_post=min(post,16.0)
+        else:
+            ev_pre=pre; ev_post=post
         windows.append({
-            "start":t-pre,
-            "end":t+post,
+            "start":t-ev_pre,
+            "end":t+ev_post,
             "priority":100.0+strength,
             "sources":["runelite",typ],
         })
@@ -137,6 +191,7 @@ def build_interest_windows(
         duration,
         max(0.0,float(s.targeted_video_merge_gap_seconds)),
         max(1,int(s.targeted_video_max_windows)),
+        max(10.0,float(s.targeted_video_max_window_seconds)),
     )
 
 
