@@ -3,8 +3,8 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo.
-echo Postal AutoClip RuneLite Companion - Live Test Launcher
-echo ======================================================
+echo Postal AutoClip RuneLite Companion - Private Launcher
+echo ====================================================
 
 echo Checking Java...
 where java >nul 2>nul
@@ -12,7 +12,6 @@ if errorlevel 1 (
   echo.
   echo Java was not found on PATH.
   echo Install Eclipse Temurin JDK 11, then run this file again.
-  echo RuneLite plugin development currently targets Java 11.
   echo.
   pause
   exit /b 1
@@ -20,10 +19,44 @@ if errorlevel 1 (
 
 set "JAR="
 for %%F in (PostalAutoClipCompanion-*-all.jar) do set "JAR=%%F"
+
+if not defined JAR (
+  for %%F in (build\libs\PostalAutoClipCompanion-*-all.jar) do set "JAR=%%F"
+)
+
 if not defined JAR (
   echo.
-  echo Could not find PostalAutoClipCompanion-*-all.jar in this folder.
-  echo Download/extract the complete RuneLite companion artifact from GitHub Actions.
+  echo Companion JAR is not built yet.
+  echo Building it locally from your private source...
+  echo This is only needed the first time or after the plugin source changes.
+  echo.
+
+  if not exist "build-local.ps1" (
+    echo build-local.ps1 was not found.
+    echo Run git pull in C:\PostalAutoClip and try again.
+    echo.
+    pause
+    exit /b 1
+  )
+
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0build-local.ps1"
+  if errorlevel 1 (
+    echo.
+    echo The local RuneLite companion build failed.
+    echo Scroll up for the Gradle error, or send that output to ChatGPT.
+    echo.
+    pause
+    exit /b 1
+  )
+
+  set "JAR="
+  for %%F in (PostalAutoClipCompanion-*-all.jar) do set "JAR=%%F"
+)
+
+if not defined JAR (
+  echo.
+  echo Build finished but no PostalAutoClipCompanion-*-all.jar was found.
+  echo Send this window output to ChatGPT.
   echo.
   pause
   exit /b 1
@@ -38,7 +71,7 @@ echo  3. Close that RuneLite client, then return here.
 echo  4. Never share %%USERPROFILE%%\.runelite\credentials.properties.
 echo.
 echo Start Postal AutoClip before logging in so the bridge heartbeat appears immediately.
-echo Press any key to launch the RuneLite development client...
+echo Press any key to launch the private RuneLite development client...
 pause >nul
 
 java -ea -jar "%JAR%" --developer-mode --debug
