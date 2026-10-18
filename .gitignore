@@ -13,3 +13,6 @@ data/*.db
 !data/input/.gitkeep
 !data/output/.gitkeep
 !data/cache/.gitkeep
+runelite-companion/build/
+runelite-companion/.gradle/
+runelite-companion/PostalAutoClipCompanion-*-all.jar
