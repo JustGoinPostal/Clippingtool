@@ -21,6 +21,12 @@ class Settings(BaseModel):
     max_candidates: int = 20
     video_analysis_enabled: bool = True
     video_sample_seconds: float = 2.0
+    targeted_video_analysis_enabled: bool = True
+    targeted_video_pre_seconds: float = 16.0
+    targeted_video_post_seconds: float = 28.0
+    targeted_video_audio_z: float = 1.35
+    targeted_video_merge_gap_seconds: float = 6.0
+    targeted_video_max_windows: int = 80
     smart_boundaries: bool = True
     diversity_per_type: int = 6
     default_clip_seconds: int = 50
