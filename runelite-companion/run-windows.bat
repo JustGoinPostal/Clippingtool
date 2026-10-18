@@ -39,7 +39,7 @@ if not defined JAR (
     exit /b 1
   )
 
-  powershell.exe -NoProfile -File "%~dp0build-local.ps1"
+  powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "%~dp0build-local.ps1"
   if errorlevel 1 (
     echo.
     echo The local RuneLite companion build failed.
