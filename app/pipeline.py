@@ -9,6 +9,7 @@ from .scoring import make_candidates
 from .metadata import make_metadata
 from .render_fullscreen import render_clip
 from .video_events import analyze_video
+from .interest_windows import build_interest_windows, window_coverage_seconds
 from .learning import learned_profile
 from .ranker import local_ai_second_pass
 from .media_time import recording_start_epoch
@@ -40,26 +41,10 @@ def process_job(job_id: int):
         append_job_log(job_id,f"Cache key: {key}")
         d=duration(path); db.update_job(job_id,duration=d)
         append_job_log(job_id,f"Video duration: {d:.3f} seconds")
-        msg("Analyzing audio energy",0.07)
-        energy_file=cache/"energy.txt"; energy_json=cache/"energy.json"
-        if energy_json.exists():
-            append_job_log(job_id,f"Using cached audio energy: {energy_json}")
-            energy=json.loads(energy_json.read_text())
-        else:
-            energy=audio_energy(path,energy_file); energy_json.write_text(json.dumps(energy))
-            append_job_log(job_id,f"Audio energy samples: {len(energy)}")
-        msg("Scanning OSRS/game visuals",0.14)
-        video_json=cache/"video_events.json"
-        if video_json.exists():
-            append_job_log(job_id,f"Using cached visual analysis: {video_json}")
-            video=json.loads(video_json.read_text())
-        else:
-            video=analyze_video(path,d,s); video_json.write_text(json.dumps(video))
-            append_job_log(job_id,f"Visual samples: {len(video)}")
-        msg("Transcribing stream",0.22)
-        tx=transcribe(path,s,cache/"transcript.json",lambda x:msg(x,0.42))
-        append_job_log(job_id,f"Transcript segments: {len(tx.get('segments',[]))}; words: {len(tx.get('words',[]))}")
-        msg("Mapping exact RuneLite events",0.64)
+
+        # Exact game state is cheap and authoritative, so map RuneLite first instead
+        # of asking computer vision to rediscover kills, drops, deaths, and big hits.
+        msg("Mapping exact RuneLite events",0.06)
         game_events=[]
         if s.runelite_bridge_enabled:
             start_epoch,start_source=recording_start_epoch(path,d)
@@ -72,10 +57,54 @@ def process_job(job_id: int):
                 encoding="utf-8"
             )
         else:
-            append_job_log(job_id,"RuneLite bridge disabled; skipping exact event mapping")
+            append_job_log(job_id,"RuneLite bridge disabled; exact event mapping unavailable")
+
+        msg("Analyzing audio reactions",0.12)
+        energy_file=cache/"energy.txt"; energy_json=cache/"energy.json"
+        if energy_json.exists():
+            append_job_log(job_id,f"Using cached audio energy: {energy_json}")
+            energy=json.loads(energy_json.read_text())
+        else:
+            energy=audio_energy(path,energy_file); energy_json.write_text(json.dumps(energy))
+            append_job_log(job_id,f"Audio energy samples: {len(energy)}")
+
+        # Keep a full transcript because it is both a discovery signal for personality
+        # moments and the source for captions / smart clip boundaries.
+        msg("Transcribing stream",0.20)
+        tx=transcribe(path,s,cache/"transcript.json",lambda x:msg(x,0.46))
+        append_job_log(job_id,f"Transcript segments: {len(tx.get('segments',[]))}; words: {len(tx.get('words',[]))}")
+
+        analysis_windows=[]
+        if s.targeted_video_analysis_enabled and game_events:
+            analysis_windows=build_interest_windows(tx,energy,game_events,d,s)
+            coverage=window_coverage_seconds(analysis_windows)
+            pct=(coverage/max(d,1.0))*100.0
+            append_job_log(
+                job_id,
+                f"Targeted visual plan: {len(analysis_windows)} windows, {coverage:.1f}s coverage ({pct:.1f}% of recording)"
+            )
+            msg(f"Scanning {len(analysis_windows)} targeted gameplay/reaction windows",0.58)
+        else:
+            reason="no mapped RuneLite events" if s.targeted_video_analysis_enabled else "targeted analysis disabled"
+            append_job_log(job_id,f"Using full visual fallback: {reason}")
+            msg("Scanning full OSRS/game visuals",0.58)
+
+        window_sig=(
+            hashlib.sha1(json.dumps(analysis_windows,sort_keys=True).encode()).hexdigest()[:12]
+            if analysis_windows else "full"
+        )
+        video_json=cache/f"video_events_v2_{window_sig}.json"
+        if video_json.exists():
+            append_job_log(job_id,f"Using cached visual analysis: {video_json}")
+            video=json.loads(video_json.read_text())
+        else:
+            video=analyze_video(path,d,s,windows=analysis_windows or None)
+            video_json.write_text(json.dumps(video))
+            append_job_log(job_id,f"Visual samples: {len(video)}")
+
         msg("Learning your clip preferences",0.70)
         profile=learned_profile()
-        msg("Scoring OSRS moments and de-duplicating",0.78)
+        msg("Scoring RuneLite events + reactions and de-duplicating",0.78)
         candidates=make_candidates(tx,energy,d,s,video=video,learned=profile,game_events=game_events)
         append_job_log(job_id,f"Candidate clips after scoring/de-duplication: {len(candidates)}")
         msg("Running optional local AI second pass",0.88)
