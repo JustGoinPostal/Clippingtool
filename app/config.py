@@ -26,6 +26,7 @@ class Settings(BaseModel):
     targeted_video_post_seconds: float = 28.0
     targeted_video_audio_z: float = 1.35
     targeted_video_merge_gap_seconds: float = 6.0
+    targeted_video_max_window_seconds: float = 120.0
     targeted_video_max_windows: int = 80
     smart_boundaries: bool = True
     diversity_per_type: int = 6
