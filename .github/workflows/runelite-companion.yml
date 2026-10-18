@@ -37,6 +37,7 @@ jobs:
           mkdir -p runelite-live-test
           cp runelite-companion/build/libs/PostalAutoClipCompanion-*-all.jar runelite-live-test/
           cp runelite-companion/run-windows.bat runelite-live-test/
+          cp runelite-companion/build-local.ps1 runelite-live-test/
           cp runelite-companion/LIVE_TEST.md runelite-live-test/
       - name: Upload live-test package
         uses: actions/upload-artifact@v4
