@@ -5,18 +5,31 @@ on:
     inputs:
       version:
         description: 'Beta version label'
-        required: false
-        default: '0.9.0-beta'
+        required: true
+        default: '0.9.0-beta.1'
+      publish_release:
+        description: 'Publish/update a GitHub Release for AutoClip updates'
+        required: true
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'app/paths.py'
       - 'app/config.py'
       - 'app/desktop.py'
+      - 'app/secure_store.py'
+      - 'app/updater.py'
+      - 'app/updater_runner.py'
       - 'desktop_entry.py'
+      - 'updater_entry.py'
       - 'build_windows_beta.ps1'
+      - 'scripts/sign_windows.ps1'
       - 'installer/**'
       - 'pyproject.toml'
       - '.github/workflows/windows-installer.yml'
+
+permissions:
+  contents: write
 
 jobs:
   build-installer:
@@ -35,31 +48,107 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
+
       - name: Install packaging tools
         shell: powershell
         run: |
           choco install ffmpeg innosetup -y --no-progress
           ffmpeg -version
           ffprobe -version
+
+      - name: Configure disposable CI code-signing certificate
+        if: github.event_name == 'pull_request'
+        shell: powershell
+        run: |
+          $subject = 'CN=Postal AutoClip CI Test'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $subject -CertStoreLocation 'Cert:\CurrentUser\My' -KeyExportPolicy Exportable -KeyLength 2048 -HashAlgorithm SHA256
+          $passwordText = 'PostalAutoClip-CI-Only'
+          $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
+          $pfx = Join-Path $env:RUNNER_TEMP 'postal-autoclip-ci.pfx'
+          $cer = Join-Path $env:RUNNER_TEMP 'postal-autoclip-ci.cer'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $password | Out-Null
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\CurrentUser\TrustedPublisher' | Out-Null
+          "POSTAL_CODESIGN_PFX=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_CODESIGN_PASSWORD=$passwordText" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_CODESIGN_SKIP_TIMESTAMP=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_REQUIRE_SIGNING=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure release code-signing certificate
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        env:
+          POSTAL_PFX_B64: ${{ secrets.POSTAL_CODESIGN_PFX_B64 }}
+          POSTAL_PFX_PASSWORD: ${{ secrets.POSTAL_CODESIGN_PASSWORD }}
+          POSTAL_TIMESTAMP_URL: ${{ secrets.POSTAL_CODESIGN_TIMESTAMP_URL }}
+        run: |
+          if (-not $env:POSTAL_PFX_B64) { throw 'POSTAL_CODESIGN_PFX_B64 GitHub secret is required for manual release builds.' }
+          if (-not $env:POSTAL_PFX_PASSWORD) { throw 'POSTAL_CODESIGN_PASSWORD GitHub secret is required for manual release builds.' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'postal-autoclip-release.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:POSTAL_PFX_B64))
+          $timestamp = if ($env:POSTAL_TIMESTAMP_URL) { $env:POSTAL_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
+          "POSTAL_CODESIGN_PFX=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_CODESIGN_PASSWORD=$env:POSTAL_PFX_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_CODESIGN_TIMESTAMP_URL=$timestamp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_REQUIRE_SIGNING=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build RuneLite companion
         shell: powershell
         run: gradle -p runelite-companion clean testClasses shadowJar --no-daemon
-      - name: Build installer
+
+      - name: Build signed installer and update manifest
         shell: powershell
         run: |
           $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '0.9.0-pr-${{ github.event.pull_request.number }}' }
-          .\build_windows_beta.ps1 -Version $version
-      - name: Verify installer artifact
+          $tag = "v$version"
+          .\build_windows_beta.ps1 -Version $version -ReleaseTag $tag
+
+      - name: Verify signed artifacts
         shell: powershell
         run: |
-          $file = Get-Item installer/output/PostalAutoClip-Beta-Setup.exe -ErrorAction Stop
-          if ($file.Length -lt 1000000) { throw "Installer artifact is unexpectedly small: $($file.Length) bytes" }
-          Write-Host "Installer size: $($file.Length) bytes"
-      - name: Upload beta installer
+          $files = @(
+            'dist/PostalAutoClip/PostalAutoClip.exe',
+            'dist/PostalAutoClip/PostalAutoClipUpdater.exe',
+            'installer/output/PostalAutoClip-Beta-Setup.exe'
+          )
+          foreach ($path in $files) {
+            $file = Get-Item $path -ErrorAction Stop
+            if ($file.Length -lt 100000) { throw "Artifact is unexpectedly small: $path ($($file.Length) bytes)" }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature for $path: $($signature.Status)" }
+            Write-Host "$path :: $($signature.SignerCertificate.Subject) :: $($file.Length) bytes"
+          }
+          $manifest = Get-Content 'installer/output/postal-autoclip-update.json' -Raw | ConvertFrom-Json
+          if (-not $manifest.sha256 -or -not $manifest.signer_subject -or -not $manifest.installer_url) { throw 'Update manifest is incomplete.' }
+          $actual = (Get-FileHash -Algorithm SHA256 'installer/output/PostalAutoClip-Beta-Setup.exe').Hash.ToLowerInvariant()
+          if ($actual -ne $manifest.sha256) { throw 'Update manifest SHA-256 does not match the installer.' }
+
+      - name: Upload manual beta installer
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: PostalAutoClip-Windows-Beta-${{ inputs.version }}
-          path: installer/output/PostalAutoClip-Beta-Setup.exe
+          path: |
+            installer/output/PostalAutoClip-Beta-Setup.exe
+            installer/output/postal-autoclip-update.json
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7
+
+      - name: Publish signed GitHub update release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ inputs.version }}'
+          $tag = "v$version"
+          $title = "Postal AutoClip $version"
+          $notes = "Signed Postal AutoClip Windows beta. The application verifies both SHA-256 and Authenticode publisher identity before installing this update, and automatically restores the previous program build if the new build fails its self-test. Creator data under %LOCALAPPDATA%\PostalAutoClip is not replaced by updates."
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $tag --title $title --notes $notes --latest
+            gh release upload $tag 'installer/output/PostalAutoClip-Beta-Setup.exe' 'installer/output/postal-autoclip-update.json' --clobber
+          } else {
+            gh release create $tag 'installer/output/PostalAutoClip-Beta-Setup.exe' 'installer/output/postal-autoclip-update.json' --title $title --notes $notes --latest
+          }
