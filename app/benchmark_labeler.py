@@ -57,15 +57,34 @@ def _clean_label(row: dict[str,Any], index: int) -> dict[str,Any]:
     return out
 
 
-def load_labels(job_id: int) -> list[dict[str,Any]]:
+def load_label_state(job_id: int) -> dict[str,Any]:
     path=_label_path(job_id)
-    if not path.exists(): return []
+    if not path.exists(): return {"schema_version":1,"job_id":int(job_id),"assisted":False,"labels":[]}
     try:
         payload=json.loads(path.read_text(encoding="utf-8"))
-        rows=payload.get("labels") if isinstance(payload,dict) else payload
-        return [dict(x) for x in (rows or []) if isinstance(x,dict)]
+        if isinstance(payload,list):
+            return {"schema_version":1,"job_id":int(job_id),"assisted":False,"labels":[dict(x) for x in payload if isinstance(x,dict)]}
+        if not isinstance(payload,dict): raise ValueError
+        rows=[dict(x) for x in (payload.get("labels") or []) if isinstance(x,dict)]
+        return {
+            "schema_version":int(payload.get("schema_version",1) or 1),"job_id":int(job_id),
+            "assisted":bool(payload.get("assisted",False)),"labels":rows,
+        }
     except Exception:
-        return []
+        return {"schema_version":1,"job_id":int(job_id),"assisted":False,"labels":[]}
+
+
+def _write_label_state(job_id: int, labels: list[dict[str,Any]], assisted: bool) -> None:
+    LABEL_DIR.mkdir(parents=True,exist_ok=True)
+    path=_label_path(job_id); tmp=path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({
+        "schema_version":1,"job_id":int(job_id),"assisted":bool(assisted),"labels":labels,
+    },indent=2)+"\n",encoding="utf-8")
+    tmp.replace(path)
+
+
+def load_labels(job_id: int) -> list[dict[str,Any]]:
+    return list(load_label_state(job_id)["labels"])
 
 
 def save_labels(job_id: int, rows: list[dict[str,Any]]) -> list[dict[str,Any]]:
@@ -73,12 +92,18 @@ def save_labels(job_id: int, rows: list[dict[str,Any]]) -> list[dict[str,Any]]:
     labels=[_clean_label(dict(row),i) for i,row in enumerate(rows)]
     ids=[x["id"] for x in labels]
     if len(ids)!=len(set(ids)): raise ValueError("label ids must be unique within a VOD")
-    LABEL_DIR.mkdir(parents=True,exist_ok=True)
-    path=_label_path(job_id)
-    tmp=path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"schema_version":1,"job_id":int(job_id),"labels":labels},indent=2)+"\n",encoding="utf-8")
-    tmp.replace(path)
+    assisted=bool(load_label_state(job_id).get("assisted",False))
+    _write_label_state(job_id,labels,assisted)
     return labels
+
+
+def mark_assisted(job_id: int) -> dict[str,Any]:
+    _job(job_id)
+    state=load_label_state(job_id)
+    if not bool(state.get("assisted",False)):
+        _write_label_state(job_id,list(state.get("labels") or []),True)
+        state=load_label_state(job_id)
+    return state
 
 
 def _default_manifest() -> dict[str,Any]:
@@ -109,28 +134,29 @@ def _load_manifest() -> dict[str,Any]:
         raise RuntimeError(f"private corpus manifest is invalid: {e}") from e
 
 
-def export_session(job_id: int, session_id: str, split: str, *, top_k: int=3, max_predictions: int|None=None,
-                   blind_labeled: bool=True) -> dict[str,Any]:
-    job=_job(job_id)
-    labels=load_labels(job_id)
+def export_session(job_id: int, session_id: str, split: str, *, top_k: int=3, max_predictions: int|None=None) -> dict[str,Any]:
+    job=_job(job_id); state=load_label_state(job_id); labels=list(state.get("labels") or [])
     if not labels: raise ValueError("label this VOD before exporting it")
+    assisted=bool(state.get("assisted",False))
     slug=_safe_slug(session_id)
     split=str(split or "").strip().lower()
     if split not in {"tuning","heldout"}: raise ValueError("split must be tuning or heldout")
-    if split=="heldout" and not blind_labeled:
-        raise ValueError("held-out sessions must be labeled blind before AutoClip predictions are revealed")
+    if split=="heldout" and assisted:
+        raise ValueError("held-out export blocked: AutoClip predictions were revealed for this VOD, so its labels are permanently marked assisted")
 
     PRIVATE_DIR.mkdir(parents=True,exist_ok=True)
     labels_name=f"{slug}.labels.json"; case_name=f"{slug}.case.json"
     labels_path=PRIVATE_DIR/labels_name; case_path=PRIVATE_DIR/case_name
-    labels_path.write_text(json.dumps({"schema_version":1,"job_id":int(job_id),"labels":labels},indent=2)+"\n",encoding="utf-8")
+    labeling_mode="assisted" if assisted else "blind"
+    labels_path.write_text(json.dumps({
+        "schema_version":1,"job_id":int(job_id),"labeling_mode":labeling_mode,"labels":labels,
+    },indent=2)+"\n",encoding="utf-8")
     case=export_job_case(int(job_id),labels,top_k=max(1,int(top_k)),max_predictions=max_predictions)
-    case["session_id"]=slug
-    case["labeling_mode"]="blind" if blind_labeled else "assisted"
+    case["session_id"]=slug; case["labeling_mode"]=labeling_mode
     case_path.write_text(json.dumps(case,indent=2)+"\n",encoding="utf-8")
 
     manifest=_load_manifest(); sessions=list(manifest.get("sessions") or [])
-    entry={"id":slug,"split":split,"case":case_name,"labeling_mode":case["labeling_mode"]}
+    entry={"id":slug,"split":split,"case":case_name,"labeling_mode":labeling_mode}
     replaced=False
     for i,row in enumerate(sessions):
         if isinstance(row,dict) and str(row.get("id") or "")==slug:
@@ -140,8 +166,8 @@ def export_session(job_id: int, session_id: str, split: str, *, top_k: int=3, ma
     tmp=MANIFEST_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(manifest,indent=2)+"\n",encoding="utf-8"); tmp.replace(MANIFEST_PATH)
     return {
-        "ok":True,"job_id":int(job_id),"session_id":slug,"split":split,"blind_labeled":bool(blind_labeled),
-        "label_count":len(labels),"prediction_count":len(case.get("predictions") or []),
+        "ok":True,"job_id":int(job_id),"session_id":slug,"split":split,"blind_labeled":not assisted,
+        "labeling_mode":labeling_mode,"label_count":len(labels),"prediction_count":len(case.get("predictions") or []),
         "labels_path":str(labels_path),"case_path":str(case_path),"manifest_path":str(MANIFEST_PATH),
         "source_filename":Path(str(job.get("source_path") or "")).name,
     }
@@ -165,6 +191,7 @@ def jobs():
         "id":int(x["id"]),"filename":Path(str(x.get("source_path") or "")).name,
         "status":str(x.get("status") or ""),"duration":float(x.get("duration") or 0),
         "created_at":x.get("created_at"),"label_count":len(load_labels(int(x["id"]))),
+        "assisted":bool(load_label_state(int(x["id"])).get("assisted",False)),
     } for x in rows]
 
 
@@ -172,6 +199,7 @@ def jobs():
 def job_detail(job_id: int, reveal_predictions: bool=False):
     try: job=_job(job_id)
     except KeyError: raise HTTPException(404,"Job not found")
+    state=mark_assisted(job_id) if reveal_predictions else load_label_state(job_id)
     clips=[]
     if reveal_predictions:
         clips=db.q("""SELECT id,start,end,score,event_type,story_archetype,status,title,reason
@@ -179,8 +207,8 @@ def job_detail(job_id: int, reveal_predictions: bool=False):
     return {
         "id":int(job["id"]),"filename":Path(str(job.get("source_path") or "")).name,
         "status":job.get("status"),"duration":float(job.get("duration") or 0),
-        "labels":load_labels(job_id),"predictions":clips,
-        "predictions_revealed":bool(reveal_predictions),"event_types":list(EVENT_TYPES),
+        "labels":list(state.get("labels") or []),"assisted":bool(state.get("assisted",False)),
+        "predictions":clips,"predictions_revealed":bool(reveal_predictions),"event_types":list(EVENT_TYPES),
     }
 
 
@@ -190,7 +218,8 @@ def labels_put(job_id: int, payload: dict=Body(...)):
     try: labels=save_labels(job_id,rows)
     except KeyError: raise HTTPException(404,"Job not found")
     except ValueError as e: raise HTTPException(400,str(e))
-    return {"ok":True,"job_id":int(job_id),"labels":labels,"count":len(labels)}
+    state=load_label_state(job_id)
+    return {"ok":True,"job_id":int(job_id),"labels":labels,"count":len(labels),"assisted":bool(state.get("assisted",False))}
 
 
 @app.post("/api/jobs/{job_id}/export")
@@ -200,7 +229,6 @@ def export(job_id: int, payload: dict=Body(...)):
             job_id,str(payload.get("session_id") or ""),str(payload.get("split") or ""),
             top_k=int(payload.get("top_k",3) or 3),
             max_predictions=int(payload["max_predictions"]) if payload.get("max_predictions") is not None else None,
-            blind_labeled=bool(payload.get("blind_labeled",True)),
         )
     except KeyError: raise HTTPException(404,"Job not found")
     except (ValueError,RuntimeError) as e: raise HTTPException(400,str(e))
