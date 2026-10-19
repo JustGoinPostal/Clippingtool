@@ -61,9 +61,9 @@ def normalize_event_type(event_type: str, payload: dict[str, Any] | None = None)
         return "quest_complete"
     if "just advanced" in text or "total level is now" in text or raw in {"level_up", "skill_level", "skill_milestone"}:
         return "skill_milestone"
-    if raw in {"playerlootreceived", "player_loot_received", "pk_loot"} or "player loot" in text:
+    if raw in {"player_loot", "playerlootreceived", "player_loot_received", "pk_loot"} or "player loot" in text:
         return "player_loot"
-    if raw in {"npclootreceived", "npc_loot_received", "server_npc_loot"}:
+    if raw in {"npc_loot", "npclootreceived", "npc_loot_received", "server_npc_loot"}:
         return "npc_loot"
     # Generic loot must remain context-sensitive: RuneLite's LootReceived can use
     # the same event label for raid chests/reward interfaces and ordinary loot.
