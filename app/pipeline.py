@@ -6,6 +6,7 @@ from . import db
 from .media import duration, audio_energy
 from .transcribe import transcribe
 from .scoring import make_candidates
+from .osrs_story_apply import apply_story_intelligence
 from .metadata import make_metadata
 from .render_fullscreen import render_clip
 from .video_events import analyze_video
@@ -107,6 +108,9 @@ def process_job(job_id: int):
         msg("Scoring RuneLite events + reactions and de-duplicating",0.78)
         candidates=make_candidates(tx,energy,d,s,video=video,learned=profile,game_events=game_events)
         append_job_log(job_id,f"Candidate clips after scoring/de-duplication: {len(candidates)}")
+        msg("Building OSRS story moments",0.83)
+        candidates=apply_story_intelligence(candidates,game_events,tx,d,s)
+        append_job_log(job_id,f"Candidate clips after OSRS story pass: {len(candidates)}")
         msg("Running optional local AI second pass",0.88)
         candidates=local_ai_second_pass(candidates,s)
         append_job_log(job_id,f"Candidate clips after local AI second pass: {len(candidates)}")
