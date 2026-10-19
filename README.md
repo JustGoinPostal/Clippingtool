@@ -140,7 +140,7 @@ AutoClip separates reference evidence into three modes:
 
 The reference client uses the official YouTube Data API rather than scraping YouTube pages.
 
-Set a separate read-only API key locally:
+Set a separate API key locally:
 
 ```powershell
 $env:YOUTUBE_DATA_API_KEY="..."
