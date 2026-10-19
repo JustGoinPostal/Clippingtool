@@ -54,7 +54,6 @@ def init_db():
           UNIQUE(clip_id,variant), FOREIGN KEY(clip_id) REFERENCES clips(id)
         );
         CREATE INDEX IF NOT EXISTS idx_renders_clip ON renders(clip_id);
-        CREATE INDEX IF NOT EXISTS idx_renders_qa ON renders(clip_id,qa_status,quality_score);
         CREATE TABLE IF NOT EXISTS publish_queue (
           id INTEGER PRIMARY KEY AUTOINCREMENT, clip_id INTEGER NOT NULL, render_id INTEGER NOT NULL, platform TEXT NOT NULL,
           scheduled_for REAL NOT NULL, status TEXT NOT NULL DEFAULT 'queued', title TEXT NOT NULL DEFAULT '',
@@ -66,7 +65,6 @@ def init_db():
           FOREIGN KEY(clip_id) REFERENCES clips(id), FOREIGN KEY(render_id) REFERENCES renders(id)
         );
         CREATE INDEX IF NOT EXISTS idx_publish_due ON publish_queue(status,scheduled_for);
-        CREATE INDEX IF NOT EXISTS idx_publish_retry ON publish_queue(status,next_attempt_at);
         """)
         _ensure_column(c,"clips","event_type","TEXT NOT NULL DEFAULT 'speech'")
         _ensure_column(c,"clips","features_json","TEXT NOT NULL DEFAULT '{}'")
@@ -83,6 +81,8 @@ def init_db():
         _ensure_column(c,"renders","is_best","INTEGER NOT NULL DEFAULT 0")
         _ensure_column(c,"publish_queue","next_attempt_at","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"publish_queue","last_attempt_at","REAL NOT NULL DEFAULT 0")
+        # Migration-sensitive indexes must be created only after legacy tables
+        # have received the columns referenced by those indexes.
         c.execute("CREATE INDEX IF NOT EXISTS idx_publish_retry ON publish_queue(status,next_attempt_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_renders_qa ON renders(clip_id,qa_status,quality_score)")
         c.commit()
