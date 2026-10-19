@@ -1,6 +1,7 @@
 param(
   [string]$Version = "0.9.0-beta",
-  [string]$ReleaseTag = ""
+  [string]$ReleaseTag = "",
+  [switch]$BreakInstalledSelfTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,6 +59,15 @@ Version: $Version
 Built: $(Get-Date -Format o)
 Persistent data: %LOCALAPPDATA%\PostalAutoClip
 "@ | Set-Content '.\dist\PostalAutoClip\BUILD_INFO.txt' -Encoding UTF8
+
+if ($BreakInstalledSelfTest) {
+  $dashboard = Get-ChildItem '.\dist\PostalAutoClip' -Recurse -File -Filter 'index.html' |
+    Where-Object { $_.FullName -match '[\\/]app[\\/]static[\\/]index\.html$' } |
+    Select-Object -First 1
+  if (-not $dashboard) { throw 'Rollback-test build could not locate packaged app/static/index.html to remove.' }
+  Write-Host "INTENTIONAL ROLLBACK TEST: removing packaged dashboard $($dashboard.FullName)" -ForegroundColor Yellow
+  Remove-Item -LiteralPath $dashboard.FullName -Force
+}
 
 & '.\scripts\sign_windows.ps1' -Files @('.\dist\PostalAutoClip\PostalAutoClip.exe','.\dist\PostalAutoClip\PostalAutoClipUpdater.exe') -RequireSigning:$requireSigning
 
