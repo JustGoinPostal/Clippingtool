@@ -1,28 +1,14 @@
 # OSRS clip reference research
 
-This document records public reference material used to design Postal AutoClip's OSRS-specific editing rules. It stores observations and links only. It does **not** bundle, redistribute, or train on copies of other creators' media.
+This document records public reference material used to design Postal AutoClip's OSRS-specific research workflow. It stores observations and links only. It does **not** bundle, redistribute, or train on copies of other creators' media.
 
 Checked: 2026-10-18/19.
 
 ## Reference creators / ecosystems
 
-- Odablock / Odablock clips and shorts
-  - https://www.youtube.com/watch?v=vAqrWtXZ28U
-  - https://odablock.com/
-  - https://odablock.com/leaderboard
-  - https://streamerclips.com/channel/odablock
-- B0aty
-  - https://streamerclips.com/games/old-school-runescape
-  - https://www.twitchmetrics.net/c/27107346-b0aty/clips
-- Westham
-  - https://www.twitchmetrics.net/c/45887494-westham/clips
-- Dino_xx
-  - https://www.twitchmetrics.net/c/227217502-dino_xx/clips
-- Torvesta / high-level OSRS PvP references
-  - https://www.youtube.com/@TorvestaRS
-  - https://www.twitchmetrics.net/g/459931-old-school-runescape/clips
-- DMM / All Stars competitive clip set
-  - https://dmmosrs.com/events/all-stars-season-3/clips
+Popular OSRS creators and competitive ecosystems remain useful **market/reference targets** for public metadata research, including Odablock, B0aty, Westham, Dino_xx, Torvesta and DMM/All Stars content. Their ordinary public uploads are not presumed to authorize frame-level structural analysis or redistribution.
+
+Starter public metadata-only examples are stored in `references/osrs_public_metadata_seeds.json`.
 
 ## Rights-aware public-reference policy
 
@@ -47,9 +33,9 @@ These references are `metadata_only`. They must not contain copied descriptions,
 
 A reference can contribute frame/timing/edit observations only when one of these is true:
 1. the official YouTube Data API reports `status.license=creativeCommon`, or
-2. the creator/rightsholder has explicitly granted permission and that permission is recorded.
+2. the creator/rightsholder has explicitly granted permission and that permission has a recorded audit basis.
 
-Those references may contain AutoClip's derived structural annotations such as:
+Those references may contain AutoClip's **derived annotations**, such as:
 - hook time
 - setup time
 - payoff time
@@ -61,7 +47,7 @@ The source video itself still does not belong in this repository unless the righ
 
 ### Why the separation is enforced in code
 
-`app/public_reference.py` rejects timing/edit annotations for `metadata_only` references. `creative_commons` mode requires the verified Creative Commons license value, while `permission` mode requires an explicit permission confirmation. This prevents a future developer from accidentally turning a list of public links into an unlicensed training/test corpus.
+`app/public_reference.py` rejects timing/edit annotations for `metadata_only` references. `creative_commons` mode requires the verified Creative Commons license value. `permission` mode requires both explicit permission confirmation and a non-empty `rights_basis` audit reference. This prevents a future developer from accidentally turning a list of public links into an unlicensed training/test corpus.
 
 ## Official YouTube API workflow
 
@@ -99,39 +85,61 @@ Seed it locally with:
 postal-autoclip-reference seed .\references\osrs_public_metadata_seeds.json
 ```
 
-## Observed patterns
+## Research discipline
 
-### 1. The payoff is the title
-Strong OSRS clip titles frequently identify the actual game event: item name, KC milestone, death, PK target, stack, DMM consequence, or unusual interaction. Generic titles such as “crazy gaming moment” throw away information the OSRS audience understands immediately.
+### Metadata can form hypotheses, not product truth
+
+High-view public videos can suggest useful questions: Do strong OSRS uploads skew toward direct event-specific titles? Which categories are common? What durations appear repeatedly? How much does public engagement vary across categories?
+
+Those observations are **not** allowed to directly retune AutoClip. Channel size, upload age, existing audience and many hidden factors confound public performance data.
+
+Any detector, boundary, framing, hook or ranking change inspired by public research must still be evaluated against the private held-out golden-VOD corpus before it is accepted.
+
+### Structural observations require reusable rights
+
+For Creative Commons or explicitly permissioned references, structural annotations may be used to test hypotheses such as:
+- how early a hook appears
+- how far before the payoff setup begins
+- how long a reaction tail survives after payoff
+- whether zooms/cuts/captions tend to cluster around certain OSRS story types
+
+Even then, AutoClip learns **aggregate structural properties**, not a creator's voice, branding or exact edit.
+
+## OSRS hypotheses already reflected in the product
+
+These are product hypotheses derived from OSRS domain knowledge, creator feedback and permitted/reference research. They must continue to be judged by the private benchmark rather than assumed true forever.
+
+### 1. The payoff belongs in the title
+Strong OSRS titles often identify the actual game event: item name, KC milestone, death, PK target, stack, consequence or unusual interaction. Generic titles throw away information the OSRS audience understands immediately.
 
 AutoClip implication: exact RuneLite context should outrank generic transcript wording when generating titles and hooks.
 
 ### 2. Different OSRS events want different edit lengths
-Public high-view reward examples include clips around 18s, 23s, 30s, 39s and 43s. Competitive PK/death clips frequently cluster around ~29–30s. Chases, escapes and multi-stage competitive stories commonly need ~45–60s or longer source context.
+Reward reveals, direct PK finishes, deaths, raid payoffs, chases/escapes and personality moments do not need identical context windows.
 
-AutoClip implication: do not use one generic boundary envelope for every moment. Reward reveals, direct PK finishes, deaths, raid payoffs and narrative/chase moments require separate profiles.
+AutoClip implication: event-specific boundary envelopes are preferred over one generic duration rule.
 
 ### 3. PKs are stories, not isolated death ticks
-The interesting sequence is commonly setup -> spec/stack -> death -> loot/reaction. A clip beginning exactly at ActorDeath loses why the kill was impressive; a clip ending exactly at death loses loot value and reaction.
+The meaningful sequence can be setup -> spec/stack -> death -> loot/reaction.
 
-AutoClip implication: group nearby big-hit, PvP-kill and player-loot telemetry into one canonical story moment.
+AutoClip implication: group nearby big-hit, PvP-kill and player-loot telemetry into one canonical story moment rather than clipping only the terminal tick.
 
-### 4. Reward events often duplicate telemetry
-A single drop can generate loot, rare-drop wording, raid completion/reward signals and a collection-log message within seconds.
+### 4. Reward events can duplicate telemetry
+One reward may emit loot, rare-drop wording, raid reward/completion and collection-log signals within seconds.
 
-AutoClip implication: collapse those signals into one reward reveal rather than generating multiple near-identical candidates.
+AutoClip implication: collapse overlapping reward signals instead of generating near-identical candidates.
 
 ### 5. Personality remains first-class
-Odablock's public clip catalog includes gameplay, DMM, reactions and personality-driven moments, while B0aty's strongest catalog contains both rare rewards and human/reaction moments.
+Exact RuneLite events improve certainty but cannot represent every funny, emotional or socially compelling moment.
 
-AutoClip implication: RuneLite exact events should improve ranking, not replace transcript/audio discovery. A funny moment with no game event must still be able to win.
+AutoClip implication: transcript/audio/reaction discovery remains eligible even with no exact game event.
 
 ### 6. Context value matters
-A kill worth 50M is not the same content opportunity as a routine low-value kill. A Twisted Bow is not the same as ordinary NPC loot. A collection-log completion or pet is not equivalent to a generic item drop.
+A huge-value PK is not equivalent to an ordinary kill; a raid mega-rare, pet or collection-log completion is not equivalent to routine loot.
 
-AutoClip implication: event value, rarity, item identity, target identity, damage stack and event combination should feed moment strength, with caps to avoid one extreme outlier permanently dominating creator learning.
+AutoClip implication: event value, rarity, identity, target, damage and event combinations can feed strength, with caps/normalization so extreme outliers do not permanently dominate creator learning.
 
-## Current implementation derived from these observations
+## Current implementation
 
 - `app/osrs_story.py`: groups RuneLite events into PK, reward and death story moments and defines event-specific edit envelopes.
 - `app/osrs_story_apply.py`: promotes those stories into the final candidate set while retaining personality-only clips.
@@ -140,8 +148,8 @@ AutoClip implication: event value, rarity, item identity, target identity, damag
 - `app/benchmark.py`: objective precision/recall/boundary benchmark for labeled VODs.
 - `app/public_reference.py`: rights-aware public metadata / structural reference catalog.
 - `app/youtube_reference_api.py`: official YouTube Data API metadata + Creative Commons discovery.
-- `app/reference_research.py`: local CLI for seeding, refreshing, CC discovery, and aggregate reference reporting.
+- `app/reference_research.py`: local CLI for seeding, refreshing, CC discovery and aggregate reference reporting.
 
 ## Important constraint
 
-Reference performance is inspiration and validation data, not a formula for copying a creator's voice, branding, captions, or edits. Postal AutoClip should learn the structural properties of strong OSRS clips while producing creator-specific outputs.
+Reference performance is inspiration and hypothesis generation, not a formula for copying a creator's voice, branding, captions or edits. Postal AutoClip should produce creator-specific output, and any research-inspired behavior must survive the private held-out benchmark before release.
