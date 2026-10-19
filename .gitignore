@@ -10,6 +10,7 @@ data/output/*
 data/cache/*
 data/covers/*
 data/benchmark_labels/*
+data/public_reference_catalog.json
 data/*.db
 !data/input/.gitkeep
 !data/output/.gitkeep
