@@ -17,40 +17,31 @@ if errorlevel 1 (
   exit /b 1
 )
 
-set "JAR="
-for %%F in (PostalAutoClipCompanion-*-all.jar) do set "JAR=%%F"
-
-if not defined JAR (
-  for %%F in (build\libs\PostalAutoClipCompanion-*-all.jar) do set "JAR=%%F"
+if not exist "build-local.ps1" (
+  echo.
+  echo build-local.ps1 was not found.
+  echo Run git pull in C:\PostalAutoClip and try again.
+  echo.
+  pause
+  exit /b 1
 )
 
+echo.
+echo Checking the private companion build...
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "%~dp0build-local.ps1"
+if errorlevel 1 (
+  echo.
+  echo The local RuneLite companion build failed.
+  echo Scroll up for the Gradle error, or send that output to ChatGPT.
+  echo.
+  pause
+  exit /b 1
+)
+
+set "JAR="
+for %%F in (PostalAutoClipCompanion-*-all.jar) do set "JAR=%%F"
 if not defined JAR (
-  echo.
-  echo Companion JAR is not built yet.
-  echo Building it locally from your private source...
-  echo This is only needed the first time or after the plugin source changes.
-  echo.
-
-  if not exist "build-local.ps1" (
-    echo build-local.ps1 was not found.
-    echo Run git pull in C:\PostalAutoClip and try again.
-    echo.
-    pause
-    exit /b 1
-  )
-
-  powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "%~dp0build-local.ps1"
-  if errorlevel 1 (
-    echo.
-    echo The local RuneLite companion build failed.
-    echo Scroll up for the Gradle error, or send that output to ChatGPT.
-    echo.
-    pause
-    exit /b 1
-  )
-
-  set "JAR="
-  for %%F in (PostalAutoClipCompanion-*-all.jar) do set "JAR=%%F"
+  for %%F in (build\libs\PostalAutoClipCompanion-*-all.jar) do set "JAR=%%F"
 )
 
 if not defined JAR (
