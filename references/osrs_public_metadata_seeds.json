@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "purpose": "Public metadata references only. These entries do not authorize copying, downloading, training on, or structural timing analysis of the source media.",
+  "observed_at": "2026-10-19",
+  "references": [
+    {
+      "video_id": "dpNO7_4m85I",
+      "url": "https://www.youtube.com/watch?v=dpNO7_4m85I",
+      "source_mode": "metadata_only",
+      "license": "unknown",
+      "creator": "Odablock",
+      "title": "Learn How To Pk On OSRS (For Pures) - by Odablock",
+      "category": "guide",
+      "view_count": 119860,
+      "like_count": 2600,
+      "observed_at": "2026-10-19",
+      "structural": {}
+    },
+    {
+      "video_id": "8imlEb966o4",
+      "url": "https://www.youtube.com/watch?v=8imlEb966o4",
+      "source_mode": "metadata_only",
+      "license": "unknown",
+      "creator": "TorvestaRS",
+      "title": "Top 10 OSRS PK's (Week 1)",
+      "category": "pvp",
+      "view_count": 297683,
+      "like_count": 10000,
+      "observed_at": "2026-10-19",
+      "structural": {}
+    },
+    {
+      "video_id": "dtUOlEG0FE0",
+      "url": "https://www.youtube.com/watch?v=dtUOlEG0FE0",
+      "source_mode": "metadata_only",
+      "license": "unknown",
+      "creator": "MyNameIsB0aty",
+      "title": "OSRS HE GOT OSRS THE B0ATY RAREST OSRS DROP!! OSRS",
+      "category": "rng",
+      "view_count": 273613,
+      "like_count": null,
+      "observed_at": "2026-10-19",
+      "structural": {}
+    }
+  ]
+}
