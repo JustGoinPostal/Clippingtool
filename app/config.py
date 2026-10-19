@@ -36,13 +36,10 @@ class Settings(BaseModel):
     pre_roll_seconds: int = 12
     post_roll_seconds: int = 28
 
-    # v0.4 editing / rendering
     layout: str = "osrs_focus"
     render_width: int = 1080
     render_height: int = 1920
-    render_variants: dict[str, int] = Field(default_factory=lambda: {
-        "short": 22, "medium": 38, "long": 58
-    })
+    render_variants: dict[str, int] = Field(default_factory=lambda: {"short": 22, "medium": 38, "long": 58})
     primary_variant: str = "medium"
     dead_air_trim_enabled: bool = True
     dead_air_padding_seconds: float = 0.55
@@ -125,9 +122,7 @@ class Settings(BaseModel):
     duplicate_window_days: int = 30
     duplicate_similarity_threshold: float = 0.62
     distribution_slots: list[str] = Field(default_factory=lambda: ["12:00", "18:30"])
-    platform_offsets_minutes: dict[str, int] = Field(default_factory=lambda: {
-        "youtube": 0, "tiktok": 20, "instagram": 40
-    })
+    platform_offsets_minutes: dict[str, int] = Field(default_factory=lambda: {"youtube": 0, "tiktok": 20, "instagram": 40})
 
     analytics_enabled: bool = True
     analytics_refresh_hours: float = 6.0
@@ -141,6 +136,10 @@ class Settings(BaseModel):
     synchronized_crosspost_enabled: bool = True
     platform_fit_enabled: bool = True
     platform_variant_min_samples: int = 3
+
+    auto_update_enabled: bool = True
+    update_check_hours: float = 6.0
+    update_manifest_url: str = "https://github.com/JustGoinPostal/Clippingtool/releases/latest/download/postal-autoclip-update.json"
 
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = ""
@@ -166,10 +165,7 @@ def _new_config_payload() -> dict[str, Any]:
     if EXAMPLE_PATH.exists():
         try:
             data = json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                data = dict(data)
-            else:
-                data = {}
+            data = dict(data) if isinstance(data, dict) else {}
         except Exception:
             data = {}
     else:
