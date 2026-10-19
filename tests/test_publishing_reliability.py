@@ -1,8 +1,12 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from app import db
 import app.publishing as publishing
+from app.api import publishing_queue_retry
 
 
 def _seed_publish_job(tmp_path: Path, platform: str) -> int:
@@ -62,5 +66,24 @@ def test_recover_interrupted_posts_fails_closed(tmp_path: Path, monkeypatch):
         assert saved_checkpointed["platform_post_id"] == "publish_123"
         assert saved_ambiguous["status"] == "needs_review"
         assert "avoid a duplicate" in saved_ambiguous["error"]
+    finally:
+        db.DB_PATH = original
+
+
+def test_uncertain_retry_requires_explicit_duplicate_risk_confirmation(tmp_path: Path):
+    original = db.DB_PATH
+    db.DB_PATH = tmp_path / "postal_test.db"
+    try:
+        db.init_db()
+        publish_id = _seed_publish_job(tmp_path, "youtube")
+        db.update_publish_job(publish_id, status="needs_review", error="uncertain remote state")
+
+        with pytest.raises(HTTPException) as exc:
+            publishing_queue_retry(publish_id, {})
+
+        assert exc.value.status_code == 409
+        assert "Confirm duplicate risk" in str(exc.value.detail)
+        saved = db.q("SELECT * FROM publish_queue WHERE id=?", (publish_id,), one=True)
+        assert saved["status"] == "needs_review"
     finally:
         db.DB_PATH = original
