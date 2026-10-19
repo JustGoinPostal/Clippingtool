@@ -35,6 +35,9 @@ $pyi = @(
   '--add-data', 'references\osrs_public_metadata_seeds.json;references',
   '--add-binary', "$ffmpeg;tools",
   '--add-binary', "$ffprobe;tools",
+  '--hidden-import', 'app.updater',
+  '--hidden-import', 'app.updater_runner',
+  '--hidden-import', 'packaging.version',
   '--collect-all', 'uvicorn',
   '--collect-all', 'faster_whisper',
   '--collect-all', 'ctranslate2',
@@ -51,6 +54,8 @@ $updaterPyi = @(
   '--distpath', '.\dist\Updater',
   '--workpath', '.\build\pyinstaller-updater',
   '--specpath', '.\build',
+  '--hidden-import', 'app.updater',
+  '--hidden-import', 'app.paths',
   '--hidden-import', 'packaging.version',
   '.\updater_entry.py'
 )
@@ -79,16 +84,19 @@ Persistent data: %LOCALAPPDATA%\PostalAutoClip
 $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
 if (-not $iscc) {
   foreach ($candidate in @(
+    "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
   )) {
     if (Test-Path $candidate) { $iscc = Get-Item $candidate; break }
   }
 }
-if (-not $iscc) { throw 'Inno Setup 6 compiler (ISCC.exe) was not found.' }
+if (-not $iscc) { throw 'Inno Setup compiler (ISCC.exe) was not found.' }
 
 New-Item -ItemType Directory -Force '.\installer\output' | Out-Null
 & $iscc.Source "/DAppVersion=$Version" '.\installer\PostalAutoClip.iss'
+if ($LASTEXITCODE -ne 0) { throw "Inno Setup compiler failed with exit code $LASTEXITCODE" }
 $installer = (Resolve-Path '.\installer\output\PostalAutoClip-Beta-Setup.exe').Path
 
 & '.\scripts\sign_windows.ps1' -Files @($installer) -RequireSigning:$requireSigning
