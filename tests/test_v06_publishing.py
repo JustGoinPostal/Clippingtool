@@ -42,8 +42,8 @@ def test_publish_queue_round_trip(tmp_path: Path):
             (job_id, 10.0, 35.0, 90.0, "Test clip", "caption", "#osrs #shorts"),
         )
         render_id = db.exec_sql(
-            "INSERT INTO renders(clip_id,variant,output_path,quality_score,is_best) VALUES(?,?,?,?,?)",
-            (clip_id, "short", str(tmp_path / "short.mp4"), 92.0, 1),
+            "INSERT INTO renders(clip_id,variant,output_path,quality_score,qa_status,is_best) VALUES(?,?,?,?,?,?)",
+            (clip_id, "short", str(tmp_path / "short.mp4"), 92.0, "pass", 1),
         )
         publish_id = db.add_publish_job(
             clip_id, render_id, "youtube", 1234.0,
@@ -54,6 +54,7 @@ def test_publish_queue_round_trip(tmp_path: Path):
         assert row["platform"] == "youtube"
         assert row["status"] == "queued"
         assert row["variant"] == "short"
+        assert row["qa_status"] == "pass"
         assert row["next_attempt_at"] == 0
         assert row["last_attempt_at"] == 0
         db.update_publish_job(publish_id, status="published", platform_post_id="abc123", last_attempt_at=100.0)
