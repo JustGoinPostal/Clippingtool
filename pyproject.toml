@@ -19,9 +19,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3"]
+build = ["pyinstaller>=6.20,<7"]
 
 [project.scripts]
 postal-autoclip = "app.api:run"
+postal-autoclip-desktop = "app.desktop:run"
 postal-autoclip-labeler = "app.benchmark_labeler:run"
 postal-autoclip-reference = "app.reference_research:main"
 

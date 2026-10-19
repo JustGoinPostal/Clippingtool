@@ -1,0 +1,46 @@
+name: Build Windows Beta Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Beta version label'
+        required: false
+        default: '0.9.0-beta'
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    env:
+      POSTAL_AUTOCLIP_HOME: ${{ github.workspace }}/.installer-test-home
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '11'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Install packaging tools
+        shell: powershell
+        run: |
+          choco install ffmpeg innosetup -y --no-progress
+          ffmpeg -version
+          ffprobe -version
+      - name: Build RuneLite companion
+        shell: powershell
+        run: gradle -p runelite-companion clean testClasses shadowJar --no-daemon
+      - name: Build installer
+        shell: powershell
+        run: .\build_windows_beta.ps1 -Version '${{ inputs.version }}'
+      - name: Upload beta installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PostalAutoClip-Windows-Beta-${{ inputs.version }}
+          path: installer/output/PostalAutoClip-Beta-Setup.exe
+          if-no-files-found: error
+          retention-days: 3

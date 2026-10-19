@@ -19,3 +19,9 @@ benchmarks/private/
 runelite-companion/build/
 runelite-companion/.gradle/
 runelite-companion/PostalAutoClipCompanion-*-all.jar
+.pytest-home/
+.installer-test-home/
+build/
+dist/
+installer/output/
+*.spec

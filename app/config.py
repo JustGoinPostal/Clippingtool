@@ -1,10 +1,12 @@
 from __future__ import annotations
 import json
+import secrets as pysecrets
 from pathlib import Path
 from typing import Any
 from pydantic import BaseModel, Field
 
-ROOT = Path(__file__).resolve().parents[1]
+from .paths import APP_HOME as ROOT, ensure_app_home
+
 CONFIG_PATH = ROOT / "config.json"
 EXAMPLE_PATH = ROOT / "config.example.json"
 
@@ -48,7 +50,6 @@ class Settings(BaseModel):
     osrs_focus_panel_height: int = 700
     osrs_focus_margin: int = 50
 
-    # Keep a visible facecam in vertical edits without using it for clip scoring.
     webcam_overlay_enabled: bool = True
     webcam_region: str = "auto"
     webcam_crop_width_ratio: float = 0.30
@@ -67,7 +68,6 @@ class Settings(BaseModel):
     caption_emphasis_scale: int = 118
     caption_uppercase: bool = True
 
-    # v0.5 automatic edit polish
     auto_hook_enabled: bool = True
     hook_duration_seconds: float = 2.8
     hook_font_size: int = 68
@@ -80,8 +80,6 @@ class Settings(BaseModel):
     quality_scoring_enabled: bool = True
     best_variant_auto_select: bool = True
 
-    # Creator-trust render QA. These gates inspect the finished MP4 and fail closed
-    # before automatic distribution when the result is technically unsafe.
     render_qa_enabled: bool = True
     render_qa_block_publish: bool = True
     render_qa_require_audio: bool = True
@@ -109,7 +107,6 @@ class Settings(BaseModel):
     render_qa_webcam_border_min_luma: float = 150.0
     render_qa_webcam_blank_luma: float = 12.0
 
-    # v0.6 publishing queue
     publishing_enabled: bool = True
     publish_poll_seconds: int = 20
     publish_max_attempts: int = 5
@@ -120,7 +117,6 @@ class Settings(BaseModel):
     youtube_default_privacy: str = "private"
     tiktok_default_privacy: str = "SELF_ONLY"
 
-    # v0.7 distribution / covers / Instagram
     auto_cover_enabled: bool = True
     youtube_set_thumbnail: bool = True
     instagram_graph_version: str = "v26.0"
@@ -133,7 +129,6 @@ class Settings(BaseModel):
         "youtube": 0, "tiktok": 20, "instagram": 40
     })
 
-    # v0.8 audience analytics / self-improvement
     analytics_enabled: bool = True
     analytics_refresh_hours: float = 6.0
     analytics_history_days: int = 90
@@ -143,7 +138,6 @@ class Settings(BaseModel):
     analytics_learning_min_age_hours: float = 24.0
     analytics_learning_min_views: int = 100
 
-    # v0.9 platform-specific learning without splitting the content calendar
     synchronized_crosspost_enabled: bool = True
     platform_fit_enabled: bool = True
     platform_variant_min_samples: int = 3
@@ -157,7 +151,7 @@ class Settings(BaseModel):
     keywords: dict[str, float] = Field(default_factory=dict)
 
     def path(self, value: str) -> Path:
-        p = Path(value)
+        p = Path(value).expanduser()
         return p if p.is_absolute() else ROOT / p
 
     @property
@@ -167,9 +161,28 @@ class Settings(BaseModel):
     @property
     def cache_path(self) -> Path: return self.path(self.cache_folder)
 
+
+def _new_config_payload() -> dict[str, Any]:
+    if EXAMPLE_PATH.exists():
+        try:
+            data = json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data = dict(data)
+            else:
+                data = {}
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    if not str(data.get("runelite_bridge_token") or "").strip() or data.get("runelite_bridge_token") == "postal-local":
+        data["runelite_bridge_token"] = pysecrets.token_urlsafe(24)
+    return Settings.model_validate(data).model_dump()
+
+
 def load_settings() -> Settings:
+    ensure_app_home()
     if not CONFIG_PATH.exists():
-        CONFIG_PATH.write_text(EXAMPLE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        CONFIG_PATH.write_text(json.dumps(_new_config_payload(), indent=2), encoding="utf-8")
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     s = Settings.model_validate(data)
     for p in (s.watch_path, s.output_path, s.cache_path):
@@ -178,9 +191,12 @@ def load_settings() -> Settings:
     (ROOT / "secrets").mkdir(parents=True, exist_ok=True)
     return s
 
+
 def save_settings(data: dict[str, Any]) -> Settings:
     current = load_settings().model_dump()
     current.update(data)
     s = Settings.model_validate(current)
+    for p in (s.watch_path, s.output_path, s.cache_path):
+        p.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(s.model_dump(), indent=2), encoding="utf-8")
     return s
