@@ -160,11 +160,27 @@ def migrate_legacy_install(source_root: Path = RESOURCE_ROOT) -> dict[str, Any]:
     return report
 
 
+def _inject_runtime_dashboard_scripts(static_dst: Path) -> None:
+    """Attach small runtime-only dashboard extensions after static mirroring."""
+    index = static_dst / "index.html"
+    if not index.exists():
+        return
+    tag = '<script src="/static/render_guard.js"></script>'
+    try:
+        html = index.read_text(encoding="utf-8")
+        if tag not in html and "</body>" in html:
+            index.write_text(html.replace("</body>", tag + "</body>"), encoding="utf-8")
+    except Exception:
+        # Static mirroring must never prevent AutoClip from launching.
+        pass
+
+
 def _sync_runtime_resources() -> None:
     static_src = RESOURCE_ROOT / "app" / "static"
     static_dst = APP_HOME / "app" / "static"
     if static_src.exists() and static_src.resolve() != static_dst.resolve():
         shutil.copytree(static_src, static_dst, dirs_exist_ok=True)
+        _inject_runtime_dashboard_scripts(static_dst)
 
     for relative in (
         Path("config.example.json"),
