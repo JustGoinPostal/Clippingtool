@@ -169,11 +169,25 @@ def _tiktok_chunk_plan(size:int)->tuple[int,int]:
     return target,int(count)
 
 
+def _tiktok_uploaded_last_byte(response:Any)->int|None:
+    """Parse TikTok's recorded upload progress from Content-Range."""
+    try:
+        raw=str(response.headers.get("Content-Range") or response.headers.get("content-range") or "").strip()
+        if not raw: return None
+        value=raw.lower().replace("bytes","").strip().split("/",1)[0].strip()
+        if "-" not in value: return None
+        return int(value.rsplit("-",1)[1].strip())
+    except Exception:
+        return None
+
+
 def _tiktok_put_chunk(client:httpx.Client,upload_url:str,mime:str,blob:bytes,first:int,size:int)->None:
     """Upload one deterministic byte range and retry only transient failures.
 
     Retrying the same Content-Range is safer than replaying the whole TikTok post
-    after a publish ID already exists. Permanent 4xx responses still fail fast.
+    after a publish ID already exists. If a response is lost and TikTok accepts
+    the bytes, a later 416 counts as success only when TikTok's progress header
+    proves the server already received through this chunk's final byte.
     """
     last=first+len(blob)-1
     retries=max(1,min(6,int(load_settings().publish_max_attempts)))
@@ -187,6 +201,11 @@ def _tiktok_put_chunk(client:httpx.Client,upload_url:str,mime:str,blob:bytes,fir
             status=int(response.status_code)
             if status < 400:
                 return
+            if status==416:
+                uploaded_last=_tiktok_uploaded_last_byte(response)
+                if uploaded_last is not None and uploaded_last>=last:
+                    return
+                response.raise_for_status()
             if status not in retryable_status and status < 500:
                 response.raise_for_status()
             try:
