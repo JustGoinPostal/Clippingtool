@@ -258,10 +258,14 @@ def publishing_queue_delete(job_id:int):
     db.exec_sql("DELETE FROM publish_queue WHERE id=?",(job_id,)); return {"ok":True}
 
 @app.post("/api/publishing/queue/{job_id}/retry")
-def publishing_queue_retry(job_id:int):
+def publishing_queue_retry(job_id:int,payload:dict=Body(default={})):
     row=db.q("SELECT * FROM publish_queue WHERE id=?",(job_id,),one=True)
     if not row: raise HTTPException(404,"Publish job not found")
-    db.update_publish_job(job_id,status="queued",scheduled_for=time.time(),error="")
+    if row["status"] in {"publishing","submitted","published"}:
+        raise HTTPException(400,"Active/published jobs cannot be retried")
+    if row["status"]=="needs_review" and not bool(payload.get("confirm_duplicate_risk",False)):
+        raise HTTPException(409,"This upload ended in an uncertain state. Confirm duplicate risk before retrying.")
+    db.update_publish_job(job_id,status="queued",scheduled_for=time.time(),next_attempt_at=0,error="")
     threading.Thread(target=process_due_posts,daemon=True).start(); return {"ok":True}
 
 @app.post("/api/publishing/run-due")
