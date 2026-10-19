@@ -10,9 +10,11 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from . import db
 from .benchmark_export import export_job_case
+from .browser_preview import ensure_browser_preview
 from .config import ROOT
 
 LABEL_DIR=ROOT/"data"/"benchmark_labels"
+PREVIEW_DIR=ROOT/"data"/"cache"/"benchmark_preview"
 PRIVATE_DIR=ROOT/"benchmarks"/"private"
 EXAMPLE_MANIFEST=ROOT/"benchmarks"/"corpus.example.json"
 MANIFEST_PATH=PRIVATE_DIR/"corpus.json"
@@ -175,7 +177,7 @@ def export_session(job_id: int, session_id: str, split: str, *, top_k: int=3, ma
 
 @app.on_event("startup")
 def startup():
-    db.init_db(); LABEL_DIR.mkdir(parents=True,exist_ok=True); PRIVATE_DIR.mkdir(parents=True,exist_ok=True)
+    db.init_db(); LABEL_DIR.mkdir(parents=True,exist_ok=True); PRIVATE_DIR.mkdir(parents=True,exist_ok=True); PREVIEW_DIR.mkdir(parents=True,exist_ok=True)
 
 
 @app.get("/",response_class=HTMLResponse)
@@ -240,7 +242,14 @@ def source(job_id: int):
     except KeyError: raise HTTPException(404,"Job not found")
     path=Path(str(row.get("source_path") or ""))
     if not path.exists(): raise HTTPException(404,"Source recording is missing")
-    return FileResponse(path,media_type="video/mp4",filename=path.name)
+    try:
+        playable,mode=ensure_browser_preview(path,PREVIEW_DIR)
+    except Exception as e:
+        raise HTTPException(500,f"Could not create browser preview: {type(e).__name__}: {e}")
+    return FileResponse(
+        playable,media_type="video/mp4",
+        headers={"Cache-Control":"private, max-age=3600","X-Postal-Preview-Mode":mode},
+    )
 
 
 def run():
