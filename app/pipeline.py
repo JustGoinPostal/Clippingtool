@@ -137,7 +137,8 @@ def _render_context(clip: dict, source: Path, s):
     return tx,game_events
 
 def _apply_render_state(clip_id: int, qa: dict, best: dict|None):
-    if bool(qa.get("passed")):
+    # A failed variant must never erase a different variant that already passed QA.
+    if best or bool(qa.get("passed")):
         db.exec_sql("UPDATE clips SET status='rendered' WHERE id=?",(clip_id,))
     else:
         db.exec_sql("UPDATE clips SET status='needs_review',best_variant='',output_path='' WHERE id=?",(clip_id,))
@@ -175,6 +176,8 @@ def render_clip_id(clip_id: int, variant: str|None=None):
                     db.exec_sql("UPDATE renders SET is_best=1 WHERE id=?",(row["id"],))
                     db.exec_sql("UPDATE clips SET output_path=?,best_variant=? WHERE id=?",(str(out),variant,clip_id))
                     best=row
+            else:
+                best=db.q("SELECT * FROM renders WHERE clip_id=? AND is_best=1 AND qa_status='pass'",(clip_id,),one=True)
         else:
             best=db.choose_best_render(clip_id)
         _apply_render_state(clip_id,qa,best)
