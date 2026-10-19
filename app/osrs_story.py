@@ -6,29 +6,35 @@ from typing import Any
 from .config import Settings
 from .osrs_events import event_strength, normalize_event_type
 
-# These edit envelopes are intentionally OSRS-specific. They are based on the
-# shape of successful public OSRS clips: fast reward reveals, ~30 second PK
-# finishes, and longer chase/escape/raid stories when setup is part of payoff.
+# These edit envelopes are intentionally OSRS-specific. Fast payoff events get
+# compact edits; encounters with meaningful setup/escape/reaction keep more story.
 EVENT_PROFILES: dict[str, dict[str, float]] = {
     "pvp_kill": {"pre": 12.0, "post": 9.0, "min": 18.0, "max": 34.0},
+    "pvp_escape": {"pre": 13.0, "post": 10.0, "min": 24.0, "max": 52.0},
     "player_loot": {"pre": 8.0, "post": 9.0, "min": 15.0, "max": 30.0},
     "big_hit": {"pre": 7.0, "post": 8.0, "min": 13.0, "max": 24.0},
     "big_hit_taken": {"pre": 8.0, "post": 9.0, "min": 15.0, "max": 28.0},
     "player_death": {"pre": 12.0, "post": 11.0, "min": 19.0, "max": 38.0},
     "rare_drop": {"pre": 8.0, "post": 13.0, "min": 16.0, "max": 34.0},
+    "pet_drop": {"pre": 9.0, "post": 16.0, "min": 18.0, "max": 38.0},
     "collection_log": {"pre": 8.0, "post": 13.0, "min": 16.0, "max": 34.0},
     "raid_reward": {"pre": 12.0, "post": 18.0, "min": 24.0, "max": 48.0},
     "raid_complete": {"pre": 15.0, "post": 18.0, "min": 26.0, "max": 52.0},
-    "boss_kill": {"pre": 10.0, "post": 12.0, "min": 18.0, "max": 38.0},
+    "boss_kill": {"pre": 12.0, "post": 12.0, "min": 20.0, "max": 42.0},
+    "combat_achievement": {"pre": 8.0, "post": 12.0, "min": 15.0, "max": 32.0},
+    "skill_milestone": {"pre": 7.0, "post": 12.0, "min": 15.0, "max": 30.0},
+    "quest_complete": {"pre": 8.0, "post": 13.0, "min": 16.0, "max": 34.0},
+    "personal_best": {"pre": 9.0, "post": 13.0, "min": 17.0, "max": 36.0},
     "npc_loot": {"pre": 7.0, "post": 10.0, "min": 15.0, "max": 30.0},
     "loot": {"pre": 7.0, "post": 10.0, "min": 15.0, "max": 30.0},
 }
 
-REWARD_TYPES = {"rare_drop", "collection_log", "raid_reward", "raid_complete", "npc_loot", "loot"}
+REWARD_TYPES = {"pet_drop", "rare_drop", "collection_log", "raid_reward", "raid_complete", "npc_loot", "loot"}
 REWARD_PRIORITY = {
-    "collection_log": 6,
-    "raid_reward": 5,
-    "rare_drop": 4,
+    "pet_drop": 8,
+    "collection_log": 7,
+    "raid_reward": 6,
+    "rare_drop": 5,
     "raid_complete": 3,
     "npc_loot": 2,
     "loot": 1,
@@ -46,7 +52,7 @@ def _payload(event: dict[str, Any]) -> dict[str, Any]:
 
 def _name(event: dict[str, Any]) -> str:
     p = _payload(event)
-    return str(p.get("name") or p.get("source") or p.get("target_name") or "").strip().lower()
+    return str(p.get("name") or p.get("source") or p.get("target_name") or p.get("opponent_name") or "").strip().lower()
 
 
 def _same_actor(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -57,7 +63,7 @@ def _same_actor(a: dict[str, Any], b: dict[str, Any]) -> bool:
 def _loot_value(event: dict[str, Any]) -> float:
     p = _payload(event)
     try:
-        return max(0.0, float(p.get("total_value", 0) or 0))
+        return max(0.0, float(p.get("total_value", p.get("loot_value", 0)) or 0))
     except Exception:
         return 0.0
 
@@ -73,8 +79,6 @@ def _max_hit(event: dict[str, Any]) -> float:
 def _value_bonus(value: float) -> float:
     if value <= 0:
         return 0.0
-    # Starts becoming meaningful around 1m and saturates so a 1b PK does not
-    # permanently dominate every other creator signal.
     return min(22.0, max(0.0, math.log10(max(value, 1.0)) - 6.0) * 8.0)
 
 
@@ -122,10 +126,11 @@ def _reward_cluster(events: list[dict[str, Any]], index: int, used: set[int]) ->
         p["items"] = items[:12]
     if total_value:
         p["total_value"] = total_value
-    p["moment_archetype"] = "reward_reveal"
-    p["source_event_types"] = [str(x.get("event_type") or "") for x in rows]
+    source_types = [str(x.get("event_type") or "") for x in rows]
+    p["moment_archetype"] = "pet_reveal" if "pet_drop" in source_types else "reward_reveal"
+    p["source_event_types"] = source_types
     p["story_start"] = max(0.0, min(_t(x) for x in rows) - 8.0)
-    p["story_end"] = max(_t(x) for x in rows) + 12.0
+    p["story_end"] = max(_t(x) for x in rows) + (16.0 if "pet_drop" in source_types else 12.0)
     if messages:
         p["story_messages"] = messages[:4]
     canonical["payload"] = p
@@ -133,19 +138,106 @@ def _reward_cluster(events: list[dict[str, Any]], index: int, used: set[int]) ->
     return canonical, group
 
 
-def build_story_events(game_events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Collapse exact RuneLite telemetry into clip-worthy OSRS story moments.
+def _state_number(state: dict[str, Any], key: str, default: float = 0.0) -> float:
+    try:
+        return float(_payload(state).get(key, default) or default)
+    except Exception:
+        return default
 
-    bridge_* events are framing telemetry and intentionally excluded here; the raw
-    event stream still goes to the renderer. This function is only for ranking and
-    clip boundary decisions.
+
+def _distance(a: dict[str, Any], b: dict[str, Any]) -> float:
+    ax, ay = _state_number(a, "world_x", math.nan), _state_number(a, "world_y", math.nan)
+    bx, by = _state_number(b, "world_x", math.nan), _state_number(b, "world_y", math.nan)
+    if not all(math.isfinite(v) for v in (ax, ay, bx, by)):
+        return 0.0
+    return math.hypot(bx - ax, by - ay)
+
+
+def _escape_events(all_events: list[dict[str, Any]], raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Infer close PvP escapes from authoritative combat + local state telemetry.
+
+    We intentionally call this an inference: it requires a recent PvP opponent,
+    dangerous incoming damage, low HP, meaningful movement, disengagement, and no
+    death shortly afterward. A simple target change can never create an escape.
     """
-    raw = sorted([e for e in (game_events or []) if not str(e.get("event_type") or "").startswith("bridge_")], key=_t)
+    states = sorted([
+        e for e in all_events
+        if str(e.get("event_type") or "") == "bridge_state"
+    ], key=_t)
+    deaths = [_t(e) for e in raw if normalize_event_type(e.get("event_type", ""), _payload(e)) == "player_death"]
+    incoming = [e for e in raw if normalize_event_type(e.get("event_type", ""), _payload(e)) == "big_hit_taken"]
+    out: list[dict[str, Any]] = []
+    last_end = -999.0
+
+    for hit in incoming:
+        t = _t(hit)
+        if t < last_end - 4.0:
+            continue
+        hp = _payload(hit)
+        opponent_type = str(hp.get("opponent_type") or "")
+        opponent_name = str(hp.get("opponent_name") or "")
+        nearby = [s for s in states if t - 3.0 <= _t(s) <= t + 18.0]
+        if len(nearby) < 3:
+            continue
+        pvp_states = [s for s in nearby if bool(_payload(s).get("recent_pvp")) or str(_payload(s).get("target_type") or "") == "player"]
+        if opponent_type != "player" and not pvp_states:
+            continue
+        if any(t <= death_t <= t + 18.0 for death_t in deaths):
+            continue
+
+        lowest = min(nearby, key=lambda s: _state_number(s, "hp_ratio", 1.0))
+        lowest_ratio = _state_number(lowest, "hp_ratio", 1.0)
+        lowest_hp = int(_state_number(lowest, "hp", 999.0))
+        if lowest_ratio > 0.45 and lowest_hp > 35:
+            continue
+
+        positional = [s for s in nearby if math.isfinite(_state_number(s, "world_x", math.nan)) and math.isfinite(_state_number(s, "world_y", math.nan))]
+        if len(positional) < 2:
+            continue
+        moved = max(_distance(positional[0], s) for s in positional[1:])
+        if moved < 6.0:
+            continue
+
+        final_states = nearby[-2:]
+        still_fighting_player = bool(final_states) and all(str(_payload(s).get("target_type") or "") == "player" for s in final_states)
+        if still_fighting_player:
+            continue
+
+        last = nearby[-1]
+        lp = _payload(last)
+        opponent_name = opponent_name or str(lp.get("recent_pvp_opponent") or "")
+        payload = {
+            "moment_archetype": "pvp_escape",
+            "opponent_name": opponent_name,
+            "trigger_hit": int(_max_hit(hit)),
+            "lowest_hp": lowest_hp,
+            "lowest_hp_ratio": round(lowest_ratio, 4),
+            "tiles_moved": round(moved, 1),
+            "story_start": max(0.0, t - 10.0),
+            "story_end": _t(last) + 5.0,
+            "inferred": True,
+            "inference_basis": ["recent_pvp", "big_hit_taken", "low_hp", "movement", "disengaged", "survived"],
+        }
+        event = {
+            "time": _t(last),
+            "event_type": "pvp_escape",
+            "confidence": 0.92,
+            "payload": payload,
+        }
+        event["strength"] = min(100.0, event_strength(event))
+        out.append(event)
+        last_end = float(payload["story_end"])
+    return out
+
+
+def build_story_events(game_events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Collapse exact RuneLite telemetry into clip-worthy OSRS story moments."""
+    all_events = sorted(list(game_events or []), key=_t)
+    raw = sorted([e for e in all_events if not str(e.get("event_type") or "").startswith("bridge_")], key=_t)
     out: list[dict[str, Any]] = []
     used: set[int] = set()
 
-    # Reward events commonly arrive as loot + chat + collection-log/raid events.
-    # Treat that as one reveal instead of three competing clips.
+    # Reward events commonly arrive as loot + chat + collection-log/raid/pet events.
     for i, event in enumerate(raw):
         if i in used:
             continue
@@ -196,8 +288,7 @@ def build_story_events(game_events: list[dict[str, Any]] | None) -> list[dict[st
             elif xt == "player_loot" and 0 <= _t(x) - t <= 12.0 and _same_actor(kill, x):
                 used.add(j)
 
-    # Deaths should include the damage that caused the collapse plus the immediate
-    # streamer reaction instead of beginning at the death message itself.
+    # Deaths include the collapse plus immediate reaction.
     for i, event in enumerate(raw):
         if i in used:
             continue
@@ -223,6 +314,10 @@ def build_story_events(game_events: list[dict[str, Any]] | None) -> list[dict[st
         for j, x in enumerate(raw):
             if j not in used and normalize_event_type(x.get("event_type", ""), _payload(x)) == "big_hit_taken" and 0 <= t - _t(x) <= 10.0:
                 used.add(j)
+
+    # Close escapes require telemetry that proves danger, movement, disengagement,
+    # and survival. These are inferred rather than treated as exact RuneLite facts.
+    out.extend(_escape_events(all_events, raw))
 
     # Anything not absorbed into a richer story remains eligible on its own.
     for i, event in enumerate(raw):
@@ -258,8 +353,6 @@ def story_window(segments: list[dict[str, Any]], event: dict[str, Any], total: f
     end = min(total, float(p.get("story_end", t + profile["post"]) or total))
     start, end = _snap_to_speech(segments, start, end)
 
-    # Preserve enough setup and enough reaction. If the story becomes too long,
-    # the payoff remains in-frame instead of blindly trimming only the end.
     minimum = profile["min"]
     maximum = profile["max"]
     if end - start < minimum:
