@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .config import Settings
 from .framing import build_focus_keyframes
 from .media import probe, require_ffmpeg
@@ -101,6 +103,7 @@ def parse_volumedetect(text: str) -> dict[str,Any]:
 
 
 def parse_cropdetect(text: str) -> list[dict[str,int]]:
+    """Legacy parser retained for diagnostics/tests; subtitle QA no longer trusts cropdetect."""
     rows=[]; seen=set()
     for m in _CROP_RE.finditer(text or ""):
         row={k:int(m.group(k)) for k in ("w","h","x","y")}
@@ -156,21 +159,68 @@ def _filter_filename(path: Path) -> str:
     return value.replace("\\","\\\\").replace(":","\\:").replace("'","\\'")
 
 
+def _mask_row_clusters(mask: np.ndarray, max_gap: int=3) -> list[tuple[int,int]]:
+    rows=np.flatnonzero(mask.any(axis=1))
+    if rows.size==0: return []
+    clusters=[]; start=last=int(rows[0])
+    for raw in rows[1:]:
+        value=int(raw)
+        if value-last > max_gap+1:
+            clusters.append((start,last)); start=value
+        last=value
+    clusters.append((start,last))
+    return clusters
+
+
 def _caption_pixel_bounds(path: Path, width: int, height: int, duration: float) -> dict[str,Any]:
+    """Render the real ASS file on black and measure glyph pixels, not video crop geometry."""
     ass=path.with_suffix(".ass")
     if not ass.exists():
         return {"available":False,"boxes":[],"upper":[],"lower":[]}
     require_ffmpeg()
     d=max(0.8,min(65.0,float(duration)))
-    filt=f"ass='{_filter_filename(ass)}',cropdetect=limit=0.015:round=2:reset=1"
-    cmd=["ffmpeg","-hide_banner","-nostats","-v","info","-f","lavfi","-i",
-         f"color=c=black:s={int(width)}x{int(height)}:r=4:d={d:.3f}","-vf",filt,"-an","-f","null","-"]
-    result=subprocess.run(cmd,capture_output=True,text=True,encoding="utf-8",errors="replace",
-                          timeout=max(45.0,d*1.5+20.0),check=False)
-    boxes=parse_cropdetect((result.stderr or "")+"\n"+(result.stdout or ""))
-    upper=[x for x in boxes if x["y"]+x["h"]/2 < height/2]
-    lower=[x for x in boxes if x["y"]+x["h"]/2 >= height/2]
-    return {"available":True,"boxes":boxes,"upper":upper,"lower":lower}
+    source_w=max(2,int(width)); source_h=max(2,int(height))
+    analysis_w=min(source_w,360)
+    analysis_h=max(2,int(round((source_h*analysis_w/source_w)/2.0)*2))
+    fps=2
+    filt=(
+        f"ass='{_filter_filename(ass)}',fps={fps},"
+        f"scale={analysis_w}:{analysis_h}:flags=area,format=gray"
+    )
+    cmd=[
+        "ffmpeg","-hide_banner","-nostats","-v","error","-f","lavfi","-i",
+        f"color=c=black:s={source_w}x{source_h}:r={fps}:d={d:.3f}",
+        "-vf",filt,"-an","-pix_fmt","gray","-f","rawvideo","pipe:1",
+    ]
+    result=subprocess.run(cmd,capture_output=True,timeout=max(45.0,d*2.0+20.0),check=False)
+    if result.returncode!=0:
+        err=(result.stderr or b"").decode("utf-8",errors="replace")[-2000:]
+        raise RuntimeError(f"subtitle mask render failed: {err.strip()}")
+    frame_size=analysis_w*analysis_h
+    frame_count=len(result.stdout)//frame_size
+    if frame_count<=0:
+        return {"available":True,"boxes":[],"upper":[],"lower":[],"sampled_frames":0}
+    scale_x=source_w/analysis_w; scale_y=source_h/analysis_h
+    boxes=[]; seen=set()
+    raw=np.frombuffer(result.stdout[:frame_count*frame_size],dtype=np.uint8).reshape(frame_count,analysis_h,analysis_w)
+    for frame in raw:
+        mask=frame>14
+        for y0,y1 in _mask_row_clusters(mask,max_gap=3):
+            sub=mask[y0:y1+1]
+            cols=np.flatnonzero(sub.any(axis=0))
+            if cols.size==0 or int(sub.sum())<18: continue
+            x0=int(cols[0]); x1=int(cols[-1])
+            ox=max(0,int(math.floor(x0*scale_x)))
+            oy=max(0,int(math.floor(y0*scale_y)))
+            ex=min(source_w,int(math.ceil((x1+1)*scale_x)))
+            ey=min(source_h,int(math.ceil((y1+1)*scale_y)))
+            box={"w":max(1,ex-ox),"h":max(1,ey-oy),"x":ox,"y":oy}
+            key=(box["w"],box["h"],box["x"],box["y"])
+            if key not in seen:
+                seen.add(key); boxes.append(box)
+    upper=[x for x in boxes if x["y"]+x["h"]/2 < source_h/2]
+    lower=[x for x in boxes if x["y"]+x["h"]/2 >= source_h/2]
+    return {"available":True,"boxes":boxes,"upper":upper,"lower":lower,"sampled_frames":frame_count}
 
 
 def _region_luma_stats(path: Path, box: dict[str,int], duration: float, *, border_only: bool=False) -> dict[str,Any]:
