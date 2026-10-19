@@ -20,10 +20,12 @@ on:
       - 'app/secure_store.py'
       - 'app/updater.py'
       - 'app/updater_runner.py'
+      - 'app/static/**'
       - 'desktop_entry.py'
       - 'updater_entry.py'
       - 'build_windows_beta.ps1'
       - 'scripts/sign_windows.ps1'
+      - 'scripts/inno_sign_file.ps1'
       - 'installer/**'
       - 'pyproject.toml'
       - '.github/workflows/windows-installer.yml'
@@ -104,7 +106,7 @@ jobs:
           $tag = "v$version"
           .\build_windows_beta.ps1 -Version $version -ReleaseTag $tag
 
-      - name: Verify signed artifacts
+      - name: Verify signed artifacts and pinned update identity
         shell: powershell
         run: |
           $files = @(
@@ -112,17 +114,28 @@ jobs:
             'dist/PostalAutoClip/PostalAutoClipUpdater.exe',
             'installer/output/PostalAutoClip-Beta-Setup.exe'
           )
+          $signatures = @()
           foreach ($path in $files) {
             $file = Get-Item $path -ErrorAction Stop
             if ($file.Length -lt 100000) { throw "Artifact is unexpectedly small: $path ($($file.Length) bytes)" }
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
             if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature for $path: $($signature.Status)" }
-            Write-Host "$path :: $($signature.SignerCertificate.Subject) :: $($file.Length) bytes"
+            if (-not $signature.SignerCertificate.Thumbprint) { throw "Signer thumbprint is missing for $path" }
+            $signatures += $signature
+            Write-Host "$path :: $($signature.SignerCertificate.Subject) :: $($signature.SignerCertificate.Thumbprint) :: $($file.Length) bytes"
+          }
+          $expectedThumb = $signatures[0].SignerCertificate.Thumbprint.ToUpperInvariant()
+          $expectedSubject = $signatures[0].SignerCertificate.Subject
+          foreach ($signature in $signatures) {
+            if ($signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumb) { throw 'Main app, updater, and installer are not signed by the same certificate.' }
+            if ($signature.SignerCertificate.Subject -ne $expectedSubject) { throw 'Main app, updater, and installer signer subjects differ.' }
           }
           $manifest = Get-Content 'installer/output/postal-autoclip-update.json' -Raw | ConvertFrom-Json
-          if (-not $manifest.sha256 -or -not $manifest.signer_subject -or -not $manifest.installer_url) { throw 'Update manifest is incomplete.' }
+          if (-not $manifest.sha256 -or -not $manifest.signer_subject -or -not $manifest.signer_thumbprint -or -not $manifest.installer_url) { throw 'Update manifest is incomplete.' }
           $actual = (Get-FileHash -Algorithm SHA256 'installer/output/PostalAutoClip-Beta-Setup.exe').Hash.ToLowerInvariant()
           if ($actual -ne $manifest.sha256) { throw 'Update manifest SHA-256 does not match the installer.' }
+          if ($manifest.signer_thumbprint.ToUpperInvariant() -ne $expectedThumb) { throw 'Update manifest thumbprint does not match the signed application trust anchor.' }
+          if ($manifest.signer_subject -ne $expectedSubject) { throw 'Update manifest subject does not match the signed application trust anchor.' }
 
       - name: Upload manual beta installer
         if: github.event_name == 'workflow_dispatch'
@@ -144,7 +157,7 @@ jobs:
           $version = '${{ inputs.version }}'
           $tag = "v$version"
           $title = "Postal AutoClip $version"
-          $notes = "Signed Postal AutoClip Windows beta. The application verifies both SHA-256 and Authenticode publisher identity before installing this update, and automatically restores the previous program build if the new build fails its self-test. Creator data under %LOCALAPPDATA%\PostalAutoClip is not replaced by updates."
+          $notes = "Signed Postal AutoClip Windows beta. AutoClip verifies HTTPS, SHA-256, Authenticode validity, and the exact certificate thumbprint already trusted by the installed app before applying an update. If the new build fails its installed self-test, the updater restores the previous program build. Creator data under %LOCALAPPDATA%\PostalAutoClip is not replaced by updates."
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release edit $tag --title $title --notes $notes --latest
