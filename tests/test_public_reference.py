@@ -41,12 +41,18 @@ def test_creative_commons_and_permission_can_carry_structural_annotations():
         public_reference.normalize_reference({
             "video_id":"bcdefghijkl","source_mode":"permission","license":"youtube","category":"pvp"
         })
+    with pytest.raises(ValueError, match="rights_basis"):
+        public_reference.normalize_reference({
+            "video_id":"bcdefghijkl","source_mode":"permission","permission_confirmed":True,
+            "license":"youtube","category":"pvp"
+        })
     permitted=public_reference.normalize_reference({
         "video_id":"bcdefghijkl","source_mode":"permission","permission_confirmed":True,
-        "rights_basis":"Creator gave written permission", "license":"youtube","category":"pvp",
+        "rights_basis":"Creator email dated 2026-10-19", "license":"youtube","category":"pvp",
         "duration_seconds":20,"structural":{"hook_time":0.5,"payoff_time":13},
     })
     assert permitted["source_mode"]=="permission"
+    assert permitted["rights_basis"].startswith("Creator email")
 
 
 def test_catalog_is_atomic_and_unique(tmp_path: Path):
