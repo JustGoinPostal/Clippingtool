@@ -16,7 +16,7 @@ def test_version_comparison():
 
 def test_manifest_requires_https_hash_and_signer_on_windows(monkeypatch):
     import app.updater as updater
-    monkeypatch.setattr(updater.os, "name", "nt", raising=False)
+    monkeypatch.setattr(updater, "_is_windows", lambda: True)
     base = {
         "version": "0.9.1",
         "installer_url": "https://example.com/PostalAutoClip.exe",
