@@ -18,6 +18,26 @@ def duration(path: Path) -> float:
     try: return float(d.get("format",{}).get("duration",0))
     except Exception: return 0.0
 
+def run_ffmpeg(cmd: list[str], *, label: str = "FFmpeg") -> subprocess.CompletedProcess[str]:
+    """Run FFmpeg quietly on success and surface useful diagnostics on failure.
+
+    OBS/MP4 files can contain nonstandard udta metadata that recent FFmpeg builds
+    warn about before automatically retrying the metadata as raw bytes. That
+    warning is harmless, so normal renders should not scare creators with it.
+    If FFmpeg actually exits nonzero, return the useful stderr tail instead of a
+    generic CalledProcessError.
+    """
+    cp=subprocess.run(cmd,capture_output=True,text=True,encoding="utf-8",errors="replace")
+    if cp.returncode != 0:
+        lines=[]
+        for line in (cp.stderr or "").splitlines():
+            if "UDTA parsing failed retrying raw" in line:
+                continue
+            lines.append(line.rstrip())
+        detail="\n".join(lines[-24:]).strip() or "FFmpeg returned no diagnostic output."
+        raise RuntimeError(f"{label} failed (exit code {cp.returncode}).\n{detail}")
+    return cp
+
 def _filter_filename(path: Path) -> str:
     """Escape a filename for use inside a quoted FFmpeg filter option.
 
@@ -36,7 +56,7 @@ def audio_energy(path: Path, out_txt: Path) -> list[tuple[float,float]]:
           "astats=metadata=1:reset=1,"
           f"ametadata=print:key=lavfi.astats.Overall.RMS_level:file='{metadata_file}'")
     cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(path),"-vn","-af",filt,"-f","null","-"]
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd,label="Audio analysis")
     values=[]; t=None
     for line in out_txt.read_text(encoding="utf-8",errors="ignore").splitlines():
         if "pts_time:" in line:
