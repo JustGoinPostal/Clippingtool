@@ -2,8 +2,8 @@ from app.config import Settings
 from app import render_fullscreen
 
 
-def test_fullscreen_gameplay_uses_entire_vertical_frame(monkeypatch):
-    s = Settings(layout="osrs_focus")
+def test_fullscreen_gameplay_uses_entire_vertical_frame_without_webcam(monkeypatch):
+    s = Settings(layout="osrs_focus", webcam_manual_enabled=False, webcam_region="auto")
     monkeypatch.setattr(render_fullscreen, "_webcam_crop", lambda *args, **kwargs: None)
     graph, region, mode = render_fullscreen._full_game_filter(
         None, 0.0, {"event_type": "combat", "features_json": "{}"}, "C\\:/tmp/captions.ass", s, 22.0
@@ -16,20 +16,35 @@ def test_fullscreen_gameplay_uses_entire_vertical_frame(monkeypatch):
     assert "x='(iw-ow)/2'" in graph
 
 
-def test_auto_webcam_never_overlays_guessed_runelite_ui(monkeypatch):
-    s = Settings(layout="osrs_focus", webcam_region="auto")
+def test_auto_uses_calibrated_postal_webcam_not_detector(monkeypatch):
+    s = Settings(layout="osrs_focus", webcam_region="auto", webcam_manual_enabled=True)
+    monkeypatch.setattr(render_fullscreen, "_source_size", lambda *args, **kwargs: (1280, 720))
     monkeypatch.setattr(
         render_fullscreen,
         "_webcam_crop",
-        lambda *args, **kwargs: ("bottom_left", "crop=320:180:10:500"),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("heuristic webcam detector must not run")),
     )
     graph, region, mode = render_fullscreen._full_game_filter(
         None, 0.0, {"event_type": "combat", "features_json": "{}"}, "C\\:/tmp/captions.ass", s, 22.0
     )
     assert mode == "gameplay_fullscreen"
-    assert region == ""
-    assert "overlay=" not in graph
-    assert "crop=320:180:10:500" not in graph
+    assert region == "manual"
+    # 1280x720 normalized from the supplied OBS frame: x=.720, y=0, w=.280, h=.340
+    assert "crop=358:245:922:0" in graph
+    assert "overlay=345:54" in graph
+    # The real camera is ~1.46:1, not 16:9. A 390px overlay should be ~267px tall.
+    assert "scale=390:267" in graph
+
+
+def test_manual_webcam_crop_scales_with_source_resolution(monkeypatch):
+    s = Settings(layout="osrs_focus", webcam_region="manual", webcam_manual_enabled=True)
+    monkeypatch.setattr(render_fullscreen, "_source_size", lambda *args, **kwargs: (1920, 1080))
+    crop = render_fullscreen._manual_webcam_crop(None, s)
+    assert crop is not None
+    region, expr, aspect = crop
+    assert region == "manual"
+    assert expr == "crop=538:367:1382:0"
+    assert 1.45 < aspect < 1.48
 
 
 def test_explicit_webcam_region_puts_camera_top_center(monkeypatch):
