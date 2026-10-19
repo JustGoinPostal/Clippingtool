@@ -75,12 +75,18 @@ def init_db():
           render_start REAL NOT NULL DEFAULT 0,
           render_end REAL NOT NULL DEFAULT 0,
           focus_mode TEXT NOT NULL DEFAULT 'center',
+          quality_score REAL NOT NULL DEFAULT 0,
+          quality_json TEXT NOT NULL DEFAULT '{}',
+          qa_status TEXT NOT NULL DEFAULT 'unknown',
+          qa_json TEXT NOT NULL DEFAULT '{}',
+          is_best INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           UNIQUE(clip_id,variant),
           FOREIGN KEY(clip_id) REFERENCES clips(id)
         );
         CREATE INDEX IF NOT EXISTS idx_renders_clip ON renders(clip_id);
+        CREATE INDEX IF NOT EXISTS idx_renders_qa ON renders(clip_id,qa_status,quality_score);
         CREATE TABLE IF NOT EXISTS publish_queue (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           clip_id INTEGER NOT NULL,
@@ -119,10 +125,13 @@ def init_db():
         _ensure_column(c,"clips","event_context_json","TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(c,"renders","quality_score","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"renders","quality_json","TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(c,"renders","qa_status","TEXT NOT NULL DEFAULT 'unknown'")
+        _ensure_column(c,"renders","qa_json","TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(c,"renders","is_best","INTEGER NOT NULL DEFAULT 0")
         _ensure_column(c,"publish_queue","next_attempt_at","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"publish_queue","last_attempt_at","REAL NOT NULL DEFAULT 0")
         c.execute("CREATE INDEX IF NOT EXISTS idx_publish_retry ON publish_queue(status,next_attempt_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_renders_qa ON renders(clip_id,qa_status,quality_score)")
         c.commit()
 
 def q(sql: str, args=(), one=False):
@@ -188,24 +197,36 @@ def game_events_between(start_epoch: float, end_epoch: float) -> list[dict[str, 
 
 def upsert_render(clip_id: int, variant: str, output_path: str,
                   render_start: float, render_end: float, focus_mode: str,
-                  quality_score: float=0.0, quality: dict|None=None):
+                  quality_score: float=0.0, quality: dict|None=None,
+                  qa_status: str="unknown", qa: dict|None=None):
     exec_sql("""INSERT INTO renders(clip_id,variant,output_path,render_start,render_end,focus_mode,
-                quality_score,quality_json,is_best,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP)
+                quality_score,quality_json,qa_status,qa_json,is_best,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP)
                 ON CONFLICT(clip_id,variant) DO UPDATE SET
                 output_path=excluded.output_path,render_start=excluded.render_start,
                 render_end=excluded.render_end,focus_mode=excluded.focus_mode,
                 quality_score=excluded.quality_score,quality_json=excluded.quality_json,
+                qa_status=excluded.qa_status,qa_json=excluded.qa_json,
                 is_best=0,updated_at=CURRENT_TIMESTAMP""",
              (clip_id,variant,output_path,float(render_start),float(render_end),focus_mode,
-              float(quality_score),json.dumps(quality or {},separators=(",",":"))))
+              float(quality_score),json.dumps(quality or {},separators=(",",":")),
+              str(qa_status or "unknown"),json.dumps(qa or {},separators=(",",":"))))
+
+def update_render_qa(render_id: int, status: str, qa: dict|None=None):
+    exec_sql("UPDATE renders SET qa_status=?,qa_json=?,is_best=0,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+             (str(status or "unknown"),json.dumps(qa or {},separators=(",",":")),int(render_id)))
 
 def choose_best_render(clip_id: int):
-    rows=q("SELECT * FROM renders WHERE clip_id=? ORDER BY quality_score DESC,id ASC",(clip_id,))
-    if not rows:
-        exec_sql("UPDATE clips SET best_variant='' WHERE id=?",(clip_id,))
+    rows=q("""SELECT * FROM renders WHERE clip_id=?
+              ORDER BY CASE WHEN qa_status='pass' THEN 0 ELSE 1 END,quality_score DESC,id ASC""",(clip_id,))
+    safe=[r for r in rows if str(r.get("qa_status") or "") == "pass"]
+    if not safe:
+        with _lock, _con() as c:
+            c.execute("UPDATE renders SET is_best=0 WHERE clip_id=?",(clip_id,))
+            c.execute("UPDATE clips SET best_variant='',output_path='' WHERE id=?",(clip_id,))
+            c.commit()
         return None
-    best=rows[0]
+    best=safe[0]
     with _lock, _con() as c:
         c.execute("UPDATE renders SET is_best=0 WHERE clip_id=?",(clip_id,))
         c.execute("UPDATE renders SET is_best=1 WHERE id=?",(best["id"],))
@@ -216,7 +237,8 @@ def choose_best_render(clip_id: int):
     return best
 
 def clip_renders(clip_id: int):
-    return q("SELECT * FROM renders WHERE clip_id=? ORDER BY is_best DESC,quality_score DESC,id",(clip_id,))
+    return q("""SELECT * FROM renders WHERE clip_id=?
+                ORDER BY is_best DESC,CASE WHEN qa_status='pass' THEN 0 ELSE 1 END,quality_score DESC,id""",(clip_id,))
 
 def add_publish_job(clip_id: int, render_id: int, platform: str, scheduled_for: float,
                     title: str="", caption: str="", hashtags: str="", privacy: str="private",
@@ -239,7 +261,8 @@ def update_publish_job(job_id: int, **fields):
     exec_sql(f"UPDATE publish_queue SET {', '.join(sets)} WHERE id=?",vals)
 
 def publish_jobs(limit: int=100):
-    return q("""SELECT publish_queue.*,renders.variant,renders.quality_score,renders.is_best,renders.output_path,
+    return q("""SELECT publish_queue.*,renders.variant,renders.quality_score,renders.qa_status,renders.qa_json,
+                renders.is_best,renders.output_path,
                 clips.title AS clip_title,clips.description AS clip_description,clips.hashtags AS clip_hashtags
                 FROM publish_queue JOIN renders ON renders.id=publish_queue.render_id
                 JOIN clips ON clips.id=publish_queue.clip_id
