@@ -43,7 +43,7 @@ def test_duplicate_guard_is_platform_aware(monkeypatch):
     clip={"id":7,"status":"approved","title":"Big purple drop","hook_text":"NO WAY",
           "transcript":"twisted bow purple chambers", "event_type":"raid_reward",
           "render_id":70,"variant":"medium","quality_score":95,"render_start":10,"render_end":48,
-          "description":"desc","hashtags":"#osrs"}
+          "description":"desc","hashtags":"#osrs","qa_status":"pass"}
     monkeypatch.setattr(distribution,"_candidate_rows",lambda:[dict(clip)])
     monkeypatch.setattr(distribution,"_recent_rows",lambda platform,days:
         [{"clip_id":7,"title":"Big purple drop","hook_text":"NO WAY","transcript":"twisted bow purple chambers","event_type":"raid_reward"}]
