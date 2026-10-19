@@ -7,6 +7,16 @@ on:
         description: 'Beta version label'
         required: false
         default: '0.9.0-beta'
+  pull_request:
+    paths:
+      - 'app/paths.py'
+      - 'app/config.py'
+      - 'app/desktop.py'
+      - 'desktop_entry.py'
+      - 'build_windows_beta.ps1'
+      - 'installer/**'
+      - 'pyproject.toml'
+      - '.github/workflows/windows-installer.yml'
 
 jobs:
   build-installer:
@@ -36,8 +46,17 @@ jobs:
         run: gradle -p runelite-companion clean testClasses shadowJar --no-daemon
       - name: Build installer
         shell: powershell
-        run: .\build_windows_beta.ps1 -Version '${{ inputs.version }}'
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '0.9.0-pr-${{ github.event.pull_request.number }}' }
+          .\build_windows_beta.ps1 -Version $version
+      - name: Verify installer artifact
+        shell: powershell
+        run: |
+          $file = Get-Item installer/output/PostalAutoClip-Beta-Setup.exe -ErrorAction Stop
+          if ($file.Length -lt 1000000) { throw "Installer artifact is unexpectedly small: $($file.Length) bytes" }
+          Write-Host "Installer size: $($file.Length) bytes"
       - name: Upload beta installer
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: PostalAutoClip-Windows-Beta-${{ inputs.version }}
