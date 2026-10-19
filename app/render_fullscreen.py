@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from .captions import write_ass
 from .config import Settings
 from .framing import build_focus_keyframes, crop_x_expression, zoompan_y_expression
-from .media import require_ffmpeg
+from .media import require_ffmpeg, run_ffmpeg
 from .render import (
     _ffmpeg_filter_path,
     _reaction_filter,
@@ -174,7 +173,7 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
         source,start,clip,ap,s,dur,game_events=game_events
     )
     cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-ss", str(start), "-i", str(source), "-t", str(dur),
         "-filter_complex", fc, "-map", "[v]", "-map", "0:a?",
         "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
@@ -183,7 +182,7 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
     if progress:
         framing=f", {focus_points} RuneLite framing points" if focus_points else ", centered fallback"
         progress(f"Rendering {variant} vertical clip ({render_mode}{framing})")
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd,label=f"Render {variant}")
 
     return {
         "path": output,
