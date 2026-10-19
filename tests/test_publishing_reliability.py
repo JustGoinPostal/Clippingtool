@@ -19,8 +19,8 @@ def _seed_publish_job(tmp_path: Path, platform: str) -> int:
         (job_id, 1.0, 20.0, 90.0, f"{platform} clip", "caption", "#osrs"),
     )
     render_id = db.exec_sql(
-        "INSERT INTO renders(clip_id,variant,output_path,quality_score,is_best) VALUES(?,?,?,?,?)",
-        (clip_id, "short", str(tmp_path / f"{platform}_short.mp4"), 90.0, 1),
+        "INSERT INTO renders(clip_id,variant,output_path,quality_score,qa_status,is_best) VALUES(?,?,?,?,?,?)",
+        (clip_id, "short", str(tmp_path / f"{platform}_short.mp4"), 90.0, "pass", 1),
     )
     return db.add_publish_job(clip_id, render_id, platform, 1.0, "title", "caption", "#osrs", "private", {})
 
