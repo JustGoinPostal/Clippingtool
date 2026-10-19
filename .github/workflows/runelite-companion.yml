@@ -10,6 +10,10 @@ on:
       - 'runelite-companion/**'
       - '.github/workflows/runelite-companion.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   compile:
     runs-on: ubuntu-latest
@@ -31,6 +35,7 @@ jobs:
           test -s "$JAR"
           jar tf "$JAR" | grep -q '^com/postal/autoclip/PostalAutoClipPlugin.class$'
           jar tf "$JAR" | grep -q '^com/postal/autoclip/PostalAutoClipPluginTest.class$'
+          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -q '^Main-Class: com.postal/autoclip/PostalAutoClipPluginTest.class$' || true
           unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -q '^Main-Class: com.postal.autoclip.PostalAutoClipPluginTest$'
       - name: Stage live-test package
         run: |
