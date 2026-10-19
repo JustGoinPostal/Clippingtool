@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 
 RARE_ITEMS = (
@@ -25,23 +24,8 @@ def _item_name(text: str) -> str:
     return ""
 
 
-def _clip_context(clip: dict) -> dict:
-    ctx=clip.get("event_context")
-    if isinstance(ctx,dict):
-        return ctx
-    raw=clip.get("event_context_json")
-    if isinstance(raw,str) and raw.strip():
-        try:
-            parsed=json.loads(raw)
-            if isinstance(parsed,dict):
-                return parsed
-        except Exception:
-            pass
-    return {}
-
-
 def _context_item(ctx: dict) -> str:
-    if ctx.get("name") and str(ctx.get("moment_archetype") or "") == "reward_reveal":
+    if ctx.get("name") and str(ctx.get("moment_archetype") or "") in {"reward_reveal","pet_reveal"}:
         return str(ctx["name"]).strip().upper()
     for row in ctx.get("items") or []:
         if isinstance(row,dict) and row.get("name"):
@@ -58,10 +42,14 @@ def _gp(value) -> str:
     return str(int(n)) if n > 0 else ""
 
 
+def _message(ctx: dict) -> str:
+    return _clean(str(ctx.get("message") or ""))
+
+
 def generate_hook(clip: dict) -> str:
     """Generate a short OSRS-aware overlay hook with no paid/cloud dependency."""
     event=str(clip.get("event_type") or "speech").lower()
-    ctx=_clip_context(clip)
+    ctx=clip.get("event_context") if isinstance(clip.get("event_context"),dict) else {}
     archetype=str(clip.get("story_archetype") or ctx.get("moment_archetype") or "")
     text=" ".join([
         str(clip.get("title") or ""),
@@ -70,6 +58,9 @@ def generate_hook(clip: dict) -> str:
     ])
     item=_context_item(ctx) or _item_name(text)
 
+    if archetype == "pvp_smite":
+        value=_gp(ctx.get("loot_value") or ctx.get("total_value"))
+        return f"SMITED FOR {value}" if value else "HE GOT SMITED"
     if archetype in {"high_value_pk","pvp_finish"}:
         value=_gp(ctx.get("loot_value") or ctx.get("total_value"))
         hit=int(float(ctx.get("biggest_setup_hit",0) or 0))
@@ -78,11 +69,35 @@ def generate_hook(clip: dict) -> str:
         if hit >= 55:
             return f"{hit} INTO THE KO"
         return "HE'S ACTUALLY DEAD"
+    if archetype == "pvp_escape":
+        hp=int(float(ctx.get("lowest_hp",0) or 0))
+        hit=int(float(ctx.get("trigger_hit",0) or 0))
+        if 0 < hp <= 10:
+            return f"I LIVED ON {hp} HP"
+        if hit >= 50:
+            return f"{hit} HIT... AND I LIVED"
+        return "HOW DID I SURVIVE THAT?"
+    if archetype == "pet_reveal" or event == "pet_drop":
+        return f"{item}. NO WAY." if item and item != "PET" else "THAT'S THE PET. NO WAY."
     if archetype == "reward_reveal" and item:
         return f"{item}. NO WAY."
     if archetype == "death_collapse":
         hit=int(float(ctx.get("biggest_hit_taken",0) or 0))
         return f"{hit} DAMAGE. I'M DEAD." if hit >= 45 else "THIS WENT WRONG FAST"
+    if event == "combat_achievement":
+        return "COMBAT TASK DONE"
+    if event == "personal_best":
+        return "NEW PB. LET'S GO."
+    if event == "skill_milestone":
+        msg=_message(ctx)
+        lvl=re.search(r"\b(9[0-9]|[1-8][0-9]|\d)\b",msg)
+        if lvl and lvl.group(1)=="99": return "99. FINALLY."
+        return "ANOTHER MILESTONE DONE"
+    if event == "quest_complete":
+        return "QUEST COMPLETE"
+    if event == "boss_kill":
+        name=str(ctx.get("name") or "").strip().upper()
+        return f"{name} IS DOWN" if name and len(name)<=26 else "BOSS DOWN"
 
     if item:
         if event in {"raid_reward","drop","rare_drop","collection_log","loot","npc_loot"}:
@@ -105,7 +120,7 @@ def generate_hook(clip: dict) -> str:
         return "I WAS NOT READY FOR THIS"
 
     transcript=_clean(str(clip.get("transcript") or ""))
-    excited=re.search(r"(?:no way|let'?s go|oh my god|what the|bro|dude)[^.!?]{0,30}",transcript,re.I)
+    excited=re.search(r"(?:no way|let'?s go|oh my god|what the|bro|dude|holy)[^.!?]{0,30}",transcript,re.I)
     if excited:
         phrase=_clean(excited.group(0)).upper()
         if 8 <= len(phrase) <= 46:
