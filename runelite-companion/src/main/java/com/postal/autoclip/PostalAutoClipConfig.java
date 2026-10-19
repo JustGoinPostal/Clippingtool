@@ -46,4 +46,17 @@ public interface PostalAutoClipConfig extends Config
     {
         return true;
     }
+
+    @ConfigItem(keyName = "smartFraming", name = "Smart framing data", description = "Send normalized player/target screen positions to AutoClip for accurate vertical reframing")
+    default boolean smartFraming()
+    {
+        return true;
+    }
+
+    @Range(min = 1, max = 10)
+    @ConfigItem(keyName = "focusSampleTicks", name = "Framing sample ticks", description = "While interacting with a target, send one framing sample every N game ticks")
+    default int focusSampleTicks()
+    {
+        return 2;
+    }
 }
