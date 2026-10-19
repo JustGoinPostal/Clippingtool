@@ -36,9 +36,35 @@ def _compatible(candidate_type: str, story_type: str) -> bool:
         return True
     if s == "player_death" and c in {"death", "reaction", "gameplay"}:
         return True
-    if s in {"combat_achievement", "skill_milestone", "quest_complete", "personal_best", "boss_kill"} and c in {"reaction", "gameplay", "speech"}:
+    if s in {"combat_achievement", "skill_milestone", "quest_complete", "personal_best", "boss_kill"} and c in {"reaction", "gameplay", "speech", "combat"}:
         return True
     return False
+
+
+def _story_priority(story: dict[str, Any]) -> tuple[int,float]:
+    """Terminal/payoff events must beat setup signals when windows overlap."""
+    typ=normalize_event_type(story.get("event_type", ""), story.get("payload") or {})
+    priority={
+        "pvp_kill":100,
+        "pet_drop":98,
+        "raid_reward":96,
+        "collection_log":94,
+        "rare_drop":92,
+        "pvp_escape":90,
+        "raid_complete":88,
+        "boss_kill":86,
+        "player_death":84,
+        "combat_achievement":80,
+        "personal_best":78,
+        "quest_complete":76,
+        "skill_milestone":74,
+        "player_loot":65,
+        "npc_loot":55,
+        "loot":50,
+        "big_hit":35,
+        "big_hit_taken":30,
+    }.get(typ,45)
+    return priority,float(story.get("strength",0) or 0)
 
 
 def _story_score(story: dict[str, Any], current: float = 0.0) -> float:
@@ -118,7 +144,7 @@ def apply_story_intelligence(
 ) -> list[dict[str, Any]]:
     """Promote exact/inferred OSRS story arcs without crushing personality-only clips."""
     enriched_events=enrich_encounter_context(game_events)
-    stories = build_story_events(enriched_events)
+    stories = sorted(build_story_events(enriched_events),key=_story_priority,reverse=True)
     if not stories:
         return candidates
     segments = list(transcript.get("segments") or [])
@@ -173,16 +199,26 @@ def apply_story_intelligence(
     output.sort(key=lambda c: float(c.get("score", 0) or 0), reverse=True)
     keep: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
+    payoff_types={"pvp_kill","pvp_escape","pet_drop","raid_reward","collection_log","rare_drop","raid_complete","boss_kill","player_death"}
     for candidate in output:
-        duplicate = any(
-            _iou(candidate, existing) >= 0.58
-            and (
+        duplicate=False
+        for existing in keep:
+            overlap=_iou(candidate,existing)
+            if overlap < 0.58:
+                continue
+            ctyp=str(candidate.get("event_type") or "")
+            etyp=str(existing.get("event_type") or "")
+            # Preserve the already-ranked payoff event over an overlapping setup
+            # signal. Two different terminal events may coexist if they tell truly
+            # different stories, but a big hit should not evict a boss/PK kill.
+            if etyp in payoff_types and ctyp in {"big_hit","big_hit_taken","loot","npc_loot","gameplay","combat"}:
+                duplicate=True; break
+            if (
                 str(candidate.get("story_archetype") or "")
                 or str(existing.get("story_archetype") or "")
-                or _compatible(str(candidate.get("event_type") or ""), str(existing.get("event_type") or ""))
-            )
-            for existing in keep
-        )
+                or _compatible(ctyp,etyp)
+            ):
+                duplicate=True; break
         if duplicate:
             continue
         typ = str(candidate.get("event_type") or "speech")
