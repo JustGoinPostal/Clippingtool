@@ -13,6 +13,7 @@ on:
       - 'updater_entry.py'
       - 'build_windows_beta.ps1'
       - 'scripts/sign_windows.ps1'
+      - 'scripts/inno_sign_file.ps1'
       - 'installer/**'
       - 'pyproject.toml'
       - '.github/workflows/windows-install-lifecycle.yml'
@@ -72,10 +73,15 @@ jobs:
           $installer = "$env:RUNNER_TEMP\PostalAutoClip-base.exe"
           $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Base installer failed with Inno Setup exit code $($proc.ExitCode)" }
-          $exe = "$env:LOCALAPPDATA\Programs\Postal AutoClip\PostalAutoClip.exe"
+          $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
+          $exe = "$program\PostalAutoClip.exe"
           if (-not (Test-Path $exe)) { throw 'Installed PostalAutoClip.exe is missing.' }
           $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
           if ($test.ExitCode -ne 0) { throw "Installed base self-test failed: $($test.ExitCode)" }
+          $uninstaller = Get-ChildItem $program -Filter 'unins*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Signed Inno uninstaller was not found after install.' }
+          $uninstallSig = Get-AuthenticodeSignature -LiteralPath $uninstaller.FullName
+          if ($uninstallSig.Status -ne 'Valid') { throw "Installed uninstaller is not Authenticode-valid: $($uninstallSig.Status)" }
           $home = "$env:LOCALAPPDATA\PostalAutoClip"
           New-Item -ItemType Directory -Force $home | Out-Null
           'creator-data-must-survive' | Set-Content "$home\lifecycle-marker.txt" -Encoding UTF8
@@ -92,9 +98,13 @@ jobs:
           $installer = "$env:RUNNER_TEMP\PostalAutoClip-update.exe"
           $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS' -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Update installer failed with Inno Setup exit code $($proc.ExitCode)" }
-          $exe = "$env:LOCALAPPDATA\Programs\Postal AutoClip\PostalAutoClip.exe"
+          $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
+          $exe = "$program\PostalAutoClip.exe"
           $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
           if ($test.ExitCode -ne 0) { throw "Updated build self-test failed: $($test.ExitCode)" }
+          $uninstaller = Get-ChildItem $program -Filter 'unins*.exe' | Select-Object -First 1
+          $uninstallSig = Get-AuthenticodeSignature -LiteralPath $uninstaller.FullName
+          if ($uninstallSig.Status -ne 'Valid') { throw "Updated uninstaller is not Authenticode-valid: $($uninstallSig.Status)" }
           $marker = "$env:LOCALAPPDATA\PostalAutoClip\lifecycle-marker.txt"
           if ((Get-Content $marker -Raw).Trim() -ne 'creator-data-must-survive') { throw 'Creator AppData marker did not survive update.' }
 
@@ -104,6 +114,8 @@ jobs:
           $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
           $uninstaller = Get-ChildItem $program -Filter 'unins*.exe' | Select-Object -First 1
           if (-not $uninstaller) { throw 'Inno Setup uninstaller was not found.' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $uninstaller.FullName
+          if ($signature.Status -ne 'Valid') { throw "Refusing to run unsigned/invalid uninstaller in lifecycle gate: $($signature.Status)" }
           $proc = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Uninstall failed: $($proc.ExitCode)" }
           if (Test-Path "$program\PostalAutoClip.exe") { throw 'Program executable remains after uninstall.' }
@@ -116,8 +128,12 @@ jobs:
           $installer = "$env:RUNNER_TEMP\PostalAutoClip-update.exe"
           $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Reinstall failed with Inno Setup exit code $($proc.ExitCode)" }
-          $exe = "$env:LOCALAPPDATA\Programs\Postal AutoClip\PostalAutoClip.exe"
+          $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
+          $exe = "$program\PostalAutoClip.exe"
           $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
           if ($test.ExitCode -ne 0) { throw "Reinstalled build self-test failed: $($test.ExitCode)" }
+          $uninstaller = Get-ChildItem $program -Filter 'unins*.exe' | Select-Object -First 1
+          $uninstallSig = Get-AuthenticodeSignature -LiteralPath $uninstaller.FullName
+          if ($uninstallSig.Status -ne 'Valid') { throw "Reinstalled uninstaller is not Authenticode-valid: $($uninstallSig.Status)" }
           $marker = "$env:LOCALAPPDATA\PostalAutoClip\lifecycle-marker.txt"
           if ((Get-Content $marker -Raw).Trim() -ne 'creator-data-must-survive') { throw 'Creator AppData marker did not survive reinstall.' }
