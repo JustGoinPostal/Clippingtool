@@ -77,13 +77,21 @@ def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Sett
 
 def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
                       s: Settings, duration: float) -> tuple[str, str, str]:
-    """Fill the entire 9:16 Short with gameplay, optionally overlaying a real webcam."""
+    """Fill the entire 9:16 Short with gameplay and only a deliberately configured webcam.
+
+    Auto webcam detection is intentionally fail-closed for Shorts. RuneLite chat, loot
+    panels, inventory, and other UI can look enough like a webcam to a heuristic detector
+    that a false positive is worse than omitting the camera. Set webcam_region explicitly
+    to top_left/top_right/bottom_left/bottom_right when the source layout is known.
+    """
     rw, rh = int(s.render_width), int(s.render_height)
     mode = _shorts_focus_mode(clip)
     game_chain = _gameplay_chain(mode, rw, rh, duration, s)
-    webcam = _webcam_crop(source, start, s)
 
-    # If the source truly contains no meaningful gameplay, keep the reaction-only fallback.
+    configured_region = str(s.webcam_region or "auto").lower()
+    webcam = None if configured_region == "auto" else _webcam_crop(source, start, s)
+
+    # Reaction-only detection is only safe when the camera corner was explicitly chosen.
     if webcam:
         region, _ = webcam
         if _reaction_only_source(source, start, s, region):
@@ -111,7 +119,7 @@ def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
 
 def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Settings,
                 variant: str | None = None, progress=None):
-    """Shorts renderer: full-frame gameplay first, top-center webcam only as an overlay."""
+    """Shorts renderer: full-frame gameplay first, explicit webcam only as an overlay."""
     if s.layout != "osrs_focus":
         return _legacy_render_clip(source, clip, words, output, s, variant=variant, progress=progress)
 
