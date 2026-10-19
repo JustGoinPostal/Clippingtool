@@ -47,7 +47,7 @@ def normalize_event_type(event_type: str, payload: dict[str, Any] | None = None)
     payload = payload or {}
     raw = (event_type or "").strip().lower().replace("-", "_").replace(" ", "_")
     text = _payload_text(payload)
-    if raw in EVENT_WEIGHTS or raw.startswith("bridge_"):
+    if raw.startswith("bridge_"):
         return raw
     if "collection" in raw or "collection log" in text or "new item added" in text:
         return "collection_log"
@@ -65,6 +65,8 @@ def normalize_event_type(event_type: str, payload: dict[str, Any] | None = None)
         return "player_loot"
     if raw in {"npclootreceived", "npc_loot_received", "server_npc_loot"}:
         return "npc_loot"
+    # Generic loot must remain context-sensitive: RuneLite's LootReceived can use
+    # the same event label for raid chests/reward interfaces and ordinary loot.
     if "loot" in raw:
         if any(w in text for w in RAID_WORDS):
             return "raid_reward"
@@ -88,6 +90,8 @@ def normalize_event_type(event_type: str, payload: dict[str, Any] | None = None)
         return "runelite_event"
     if "raid" in raw and ("complete" in raw or "finish" in raw):
         return "raid_complete"
+    if raw in EVENT_WEIGHTS:
+        return raw
     if any(w in text for w in DROP_WORDS):
         return "rare_drop"
     if any(w in text for w in PVP_WORDS):
