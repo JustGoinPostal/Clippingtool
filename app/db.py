@@ -115,6 +115,8 @@ def init_db():
         _ensure_column(c,"clips","personal_score","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"clips","hook_text","TEXT NOT NULL DEFAULT ''")
         _ensure_column(c,"clips","best_variant","TEXT NOT NULL DEFAULT ''")
+        _ensure_column(c,"clips","story_archetype","TEXT NOT NULL DEFAULT ''")
+        _ensure_column(c,"clips","event_context_json","TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(c,"renders","quality_score","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"renders","quality_json","TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(c,"renders","is_best","INTEGER NOT NULL DEFAULT 0")
@@ -159,12 +161,13 @@ def replace_clips(job_id: int, clips: list[dict[str, Any]]):
         c.execute("DELETE FROM clips WHERE job_id=?",(job_id,))
         for x in clips:
             c.execute("""INSERT INTO clips(job_id,start,end,score,reason,transcript,title,description,hashtags,
-              event_type,features_json,base_score,personal_score,hook_text,best_variant)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
+              event_type,features_json,base_score,personal_score,hook_text,story_archetype,event_context_json,best_variant)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
               job_id,x["start"],x["end"],x["score"],x.get("reason",""),x.get("transcript",""),
               x.get("title",""),x.get("description",""),x.get("hashtags",""),x.get("event_type","speech"),
               json.dumps(x.get("features",{}),separators=(",",":")),
-              x.get("base_score",x["score"]),x.get("personal_score",0),x.get("hook_text",""),""))
+              x.get("base_score",x["score"]),x.get("personal_score",0),x.get("hook_text",""),
+              x.get("story_archetype",""),json.dumps(x.get("event_context",{}),separators=(",",":")),""))
         c.commit()
 
 def add_game_event(event_time: float, event_type: str, confidence: float=1.0,
