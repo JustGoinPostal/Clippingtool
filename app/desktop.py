@@ -16,47 +16,32 @@ SETUP_STATE = APP_HOME / "setup.json"
 
 
 def _log_setup() -> Path:
-    ensure_app_home()
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_app_home(); LOG_DIR.mkdir(parents=True, exist_ok=True)
     path = LOG_DIR / "desktop.log"
     logging.basicConfig(filename=str(path), level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     return path
 
 
 def _setup_complete() -> bool:
-    if not SETUP_STATE.exists():
-        return False
-    try:
-        payload = json.loads(SETUP_STATE.read_text(encoding="utf-8"))
-        return bool(payload.get("completed"))
-    except Exception:
-        return False
+    if not SETUP_STATE.exists(): return False
+    try: return bool(json.loads(SETUP_STATE.read_text(encoding="utf-8")).get("completed"))
+    except Exception: return False
 
 
 def _save_setup_state(watch: Path, output: Path) -> None:
-    SETUP_STATE.write_text(json.dumps({
-        "completed": True,
-        "version": 1,
-        "data_root": str(APP_HOME),
-        "watch_folder": str(watch),
-        "output_folder": str(output),
-        "completed_at": time.time(),
-    }, indent=2), encoding="utf-8")
+    SETUP_STATE.write_text(json.dumps({"completed": True, "version": 1, "data_root": str(APP_HOME), "watch_folder": str(watch), "output_folder": str(output), "completed_at": time.time()}, indent=2), encoding="utf-8")
 
 
 def _run_first_setup() -> bool:
     """Storage-only first run. Account/RuneLite setup intentionally stays in the product UI."""
-    if _setup_complete():
-        return True
+    if _setup_complete(): return True
     from .config import load_settings, save_settings
     settings = load_settings()
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox
     except Exception as exc:
-        logging.exception("First-run storage UI unavailable: %s", exc)
-        _save_setup_state(settings.watch_path, settings.output_path)
-        return True
+        logging.exception("First-run storage UI unavailable: %s", exc); _save_setup_state(settings.watch_path, settings.output_path); return True
 
     result = {"continue": False}
     root = tk.Tk(); root.title("Postal AutoClip Beta — Storage Setup"); root.geometry("760x520"); root.minsize(700, 500)
@@ -90,8 +75,7 @@ def _run_first_setup() -> bool:
             output.mkdir(parents=True, exist_ok=True)
             save_settings({"watch_folder": str(watch), "output_folder": str(output), "cache_folder": str(APP_HOME / "data" / "cache"), "auto_process_new_files": bool(auto_var.get())})
             _save_setup_state(watch, output); result["continue"] = True; root.destroy()
-        except Exception as exc:
-            messagebox.showerror("Postal AutoClip", str(exc), parent=root)
+        except Exception as exc: messagebox.showerror("Postal AutoClip", str(exc), parent=root)
 
     def cancel(): result["continue"] = False; root.destroy()
     tk.Button(buttons, text="Exit", command=cancel, width=12).pack(side="right")
@@ -110,8 +94,7 @@ def _delayed_update_check() -> None:
     try:
         from .updater import automatic_update_check_and_prompt
         automatic_update_check_and_prompt()
-    except Exception:
-        logging.exception("Automatic update check failed")
+    except Exception: logging.exception("Automatic update check failed")
 
 
 def self_test() -> dict[str, object]:
@@ -120,31 +103,24 @@ def self_test() -> dict[str, object]:
     from .config import load_settings
     from . import db
     from .secure_store import dpapi_roundtrip_self_test, secure_storage_status
+    # Import the actual API graph so a frozen build missing any application
+    # dependency/module fails here before an update is committed.
+    from .api import app as api_app
 
     settings = load_settings(); db.init_db()
+    if not getattr(api_app, "title", ""):
+        raise RuntimeError("FastAPI application graph did not initialize")
     static_index = APP_HOME / "app" / "static" / "index.html"
-    if not static_index.exists():
-        raise RuntimeError(f"Dashboard resource is missing: {static_index}")
+    if not static_index.exists(): raise RuntimeError(f"Dashboard resource is missing: {static_index}")
     for tool in ("ffmpeg", "ffprobe"):
         cp = subprocess.run([tool, "-version"], capture_output=True, text=True, timeout=20)
-        if cp.returncode != 0:
-            raise RuntimeError(f"{tool} self-test failed")
-    if not dpapi_roundtrip_self_test():
-        raise RuntimeError("Windows DPAPI round-trip self-test failed")
+        if cp.returncode != 0: raise RuntimeError(f"{tool} self-test failed")
+    if not dpapi_roundtrip_self_test(): raise RuntimeError("Windows DPAPI round-trip self-test failed")
     if getattr(sys, "frozen", False) and os.name == "nt":
         updater = PROGRAM_ROOT / "PostalAutoClipUpdater.exe"
-        if not updater.exists():
-            raise RuntimeError(f"Updater executable is missing: {updater}")
-    probe = APP_HOME / "data" / ".self-test-write"
-    probe.write_text("ok", encoding="utf-8"); probe.unlink(missing_ok=True)
-    return {
-        "ok": True,
-        "program_root": str(PROGRAM_ROOT),
-        "data_root": str(APP_HOME),
-        "watch_folder": str(settings.watch_path),
-        "output_folder": str(settings.output_path),
-        "credential_storage": secure_storage_status(),
-    }
+        if not updater.exists(): raise RuntimeError(f"Updater executable is missing: {updater}")
+    probe = APP_HOME / "data" / ".self-test-write"; probe.write_text("ok", encoding="utf-8"); probe.unlink(missing_ok=True)
+    return {"ok": True, "program_root": str(PROGRAM_ROOT), "data_root": str(APP_HOME), "watch_folder": str(settings.watch_path), "output_folder": str(settings.output_path), "credential_storage": secure_storage_status()}
 
 
 def run() -> None:
