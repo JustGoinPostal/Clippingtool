@@ -22,6 +22,10 @@ UninstallDisplayIcon={app}\PostalAutoClip.exe
 CloseApplications=yes
 RestartApplications=no
 DisableProgramGroupPage=yes
+#ifdef SignInstaller
+SignTool=PostalSign
+SignedUninstaller=yes
+#endif
 
 [Files]
 Source: "..\dist\PostalAutoClip\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
