@@ -82,8 +82,11 @@ def normalize_reference(row: dict[str, Any]) -> dict[str, Any]:
     permission_confirmed = bool(row.get("permission_confirmed", False))
     if source_mode == "creative_commons" and license_value != "creativeCommon":
         raise ValueError("creative_commons structural analysis requires license='creativeCommon'")
-    if source_mode == "permission" and not permission_confirmed:
-        raise ValueError("permission structural analysis requires permission_confirmed=true")
+    if source_mode == "permission":
+        if not permission_confirmed:
+            raise ValueError("permission structural analysis requires permission_confirmed=true")
+        if not rights_basis:
+            raise ValueError("permission structural analysis requires a non-empty rights_basis audit reference")
 
     structural = dict(row.get("structural") or {})
     if source_mode not in STRUCTURAL_MODES and structural:
@@ -227,5 +230,5 @@ def summarize_references(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "median_payoff_ratio": _median(payoff_ratios),
             "median_reaction_tail_seconds": _median(reaction_tails),
         },
-        "guardrail": "Structural timing/edit statistics include only Creative Commons or explicitly permissioned references.",
+        "guardrail": "Structural timing/edit statistics include only Creative Commons or explicitly permissioned references with an auditable rights basis.",
     }
