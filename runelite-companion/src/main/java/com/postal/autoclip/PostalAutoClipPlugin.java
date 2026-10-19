@@ -1,6 +1,8 @@
 package com.postal.autoclip;
 
 import com.google.inject.Provides;
+import java.awt.Polygon;
+import java.awt.Rectangle;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -34,7 +36,7 @@ import net.runelite.client.plugins.loottracker.LootReceived;
 
 @PluginDescriptor(
     name = "Postal AutoClip Companion",
-    description = "Sends local OSRS events to Postal AutoClip for accurate clip timing",
+    description = "Sends local OSRS events and framing data to Postal AutoClip",
     tags = {"clips", "streaming", "loot", "pvp"}
 )
 public class PostalAutoClipPlugin extends Plugin
@@ -49,6 +51,7 @@ public class PostalAutoClipPlugin extends Plugin
     private int recentDamageTick = Integer.MIN_VALUE;
     private int recentDamageAmount = 0;
     private int lastHeartbeatTick = Integer.MIN_VALUE;
+    private int lastFocusTick = Integer.MIN_VALUE;
 
     private final ExecutorService sender = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "postal-autoclip-event");
@@ -65,6 +68,7 @@ public class PostalAutoClipPlugin extends Plugin
         recentDamageTick = Integer.MIN_VALUE;
         recentDamageAmount = 0;
         lastHeartbeatTick = Integer.MIN_VALUE;
+        lastFocusTick = Integer.MIN_VALUE;
         send("bridge_online", 1.0, "{\"message\":\"Postal AutoClip RuneLite companion online\"}");
     }
 
@@ -82,6 +86,24 @@ public class PostalAutoClipPlugin extends Plugin
         {
             lastHeartbeatTick = tick;
             send("bridge_heartbeat", 1.0, "{\"message\":\"RuneLite companion active\"}");
+        }
+
+        if (!config.smartFraming())
+        {
+            return;
+        }
+
+        Player local = client.getLocalPlayer();
+        Actor target = local == null ? null : local.getInteracting();
+        if (local != null && target != null
+            && (lastFocusTick == Integer.MIN_VALUE || tick - lastFocusTick >= Math.max(1, config.focusSampleTicks())))
+        {
+            lastFocusTick = tick;
+            String targetName = target.getName() == null ? "target" : target.getName();
+            String targetType = target instanceof Player ? "player" : "npc";
+            send("bridge_focus", 1.0, withFocus(
+                "\"target_name\":\"" + esc(targetName) + "\",\"target_type\":\"" + targetType + "\"",
+                target));
         }
     }
 
@@ -101,28 +123,28 @@ public class PostalAutoClipPlugin extends Plugin
     public void onNpcLootReceived(NpcLootReceived event)
     {
         String source = event.getNpc() != null && event.getNpc().getName() != null ? event.getNpc().getName() : "NPC";
-        sendLoot("npc_loot", source, event.getItems(), true);
+        sendLoot("npc_loot", source, event.getItems(), true, event.getNpc());
     }
 
     @Subscribe
     public void onServerNpcLoot(ServerNpcLoot event)
     {
         String source = event.getComposition() != null && event.getComposition().getName() != null ? event.getComposition().getName() : "NPC";
-        sendLoot("npc_loot", source, event.getItems(), true);
+        sendLoot("npc_loot", source, event.getItems(), true, null);
     }
 
     @Subscribe
     public void onPlayerLootReceived(PlayerLootReceived event)
     {
         String source = event.getPlayer() != null && event.getPlayer().getName() != null ? event.getPlayer().getName() : "player";
-        sendLoot("player_loot", source, event.getItems(), false);
+        sendLoot("player_loot", source, event.getItems(), false, event.getPlayer());
     }
 
     // Loot Tracker emits this for raids, chests and many non-NPC reward sources.
     @Subscribe
     public void onLootReceived(LootReceived event)
     {
-        sendLoot("loot", event.getName() == null ? "loot" : event.getName(), event.getItems(), false);
+        sendLoot("loot", event.getName() == null ? "loot" : event.getName(), event.getItems(), false, null);
     }
 
     @Subscribe
@@ -139,8 +161,9 @@ public class PostalAutoClipPlugin extends Plugin
 
         if (actor == local)
         {
-            send("player_death", 1.0,
-                "{\"actor_type\":\"player\",\"local_player\":true,\"name\":\"" + esc(name) + "\"}");
+            send("player_death", 1.0, withFocus(
+                "\"actor_type\":\"player\",\"local_player\":true,\"name\":\"" + esc(name) + "\"",
+                null));
             return;
         }
 
@@ -156,14 +179,14 @@ public class PostalAutoClipPlugin extends Plugin
 
         boolean interactionMatch = actor == recentInteractionTarget || (local != null && local.getInteracting() == actor);
         int ticksSinceInteraction = actor == recentInteractionTarget ? ticksSince(recentInteractionTick) : -1;
-        String payload = "{\"actor_type\":\"player\",\"local_player\":false,"
+        String fields = "\"actor_type\":\"player\",\"local_player\":false,"
             + "\"name\":\"" + esc(name) + "\","
             + "\"attributed_to_local\":true,"
             + "\"last_confirmed_damage\":" + recentDamageAmount + ","
             + "\"ticks_since_local_damage\":" + ticksSinceDamage + ","
             + "\"interaction_match\":" + interactionMatch + ","
-            + "\"ticks_since_interaction\":" + ticksSinceInteraction + "}";
-        send("pvp_kill", 1.25, payload);
+            + "\"ticks_since_interaction\":" + ticksSinceInteraction;
+        send("pvp_kill", 1.25, withFocus(fields, actor));
     }
 
     @Subscribe
@@ -193,14 +216,14 @@ public class PostalAutoClipPlugin extends Plugin
                 String actorType = actor instanceof Player ? "player" : "npc";
                 boolean interactionMatch = actor == recentInteractionTarget || (local != null && local.getInteracting() == actor);
                 int ticksSinceInteraction = actor == recentInteractionTarget ? ticksSince(recentInteractionTick) : -1;
-                String payload = "{\"amount\":" + amount
+                String fields = "\"amount\":" + amount
                     + ",\"target_local\":false"
                     + ",\"attributed_to_local\":true"
                     + ",\"target_type\":\"" + actorType + "\""
                     + ",\"interaction_match\":" + interactionMatch
                     + ",\"ticks_since_interaction\":" + ticksSinceInteraction
-                    + ",\"name\":\"" + esc(name) + "\"}";
-                send("big_hit", Math.min(1.5, 0.65 + amount / 100.0), payload);
+                    + ",\"name\":\"" + esc(name) + "\"";
+                send("big_hit", Math.min(1.5, 0.65 + amount / 100.0), withFocus(fields, actor));
             }
             return;
         }
@@ -210,12 +233,12 @@ public class PostalAutoClipPlugin extends Plugin
         if (actor == local && amount >= config.bigHit())
         {
             String name = actor.getName() == null ? "local_player" : actor.getName();
-            String payload = "{\"amount\":" + amount
+            String fields = "\"amount\":" + amount
                 + ",\"target_local\":true"
                 + ",\"attributed_to_local\":false"
                 + ",\"target_type\":\"player\""
-                + ",\"name\":\"" + esc(name) + "\"}";
-            send("big_hit_taken", Math.min(1.35, 0.55 + amount / 110.0), payload);
+                + ",\"name\":\"" + esc(name) + "\"";
+            send("big_hit_taken", Math.min(1.35, 0.55 + amount / 110.0), withFocus(fields, null));
         }
     }
 
@@ -250,7 +273,7 @@ public class PostalAutoClipPlugin extends Plugin
 
         if (type != null)
         {
-            send(type, 1.0, "{\"message\":\"" + esc(clean) + "\"}");
+            send(type, 1.0, withFocus("\"message\":\"" + esc(clean) + "\"", null));
         }
     }
 
@@ -275,7 +298,80 @@ public class PostalAutoClipPlugin extends Plugin
         return false;
     }
 
-    private void sendLoot(String type, String source, Collection<ItemStack> items, boolean applyMinimum)
+    private double[] actorCanvasRatio(Actor actor)
+    {
+        if (actor == null)
+        {
+            return null;
+        }
+        try
+        {
+            Polygon poly = actor.getCanvasTilePoly();
+            if (poly == null)
+            {
+                return null;
+            }
+            Rectangle bounds = poly.getBounds();
+            int canvasWidth = Math.max(1, client.getCanvasWidth());
+            int canvasHeight = Math.max(1, client.getCanvasHeight());
+            double x = Math.max(0.0, Math.min(1.0, bounds.getCenterX() / canvasWidth));
+            double y = Math.max(0.0, Math.min(1.0, bounds.getCenterY() / canvasHeight));
+            return new double[]{x, y};
+        }
+        catch (Exception ignored)
+        {
+            return null;
+        }
+    }
+
+    private String focusFields(Actor target)
+    {
+        Player local = client.getLocalPlayer();
+        double[] player = actorCanvasRatio(local);
+        double[] targetPoint = actorCanvasRatio(target);
+        double focusX = 0.5;
+        double focusY = 0.5;
+        if (player != null && targetPoint != null)
+        {
+            focusX = (player[0] + targetPoint[0]) / 2.0;
+            focusY = (player[1] + targetPoint[1]) / 2.0;
+        }
+        else if (targetPoint != null)
+        {
+            focusX = targetPoint[0];
+            focusY = targetPoint[1];
+        }
+        else if (player != null)
+        {
+            focusX = player[0];
+            focusY = player[1];
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("\"canvas_width\":").append(Math.max(1, client.getCanvasWidth()));
+        sb.append(",\"canvas_height\":").append(Math.max(1, client.getCanvasHeight()));
+        sb.append(",\"focus_x_ratio\":").append(String.format(Locale.ROOT, "%.6f", focusX));
+        sb.append(",\"focus_y_ratio\":").append(String.format(Locale.ROOT, "%.6f", focusY));
+        if (player != null)
+        {
+            sb.append(",\"player_x_ratio\":").append(String.format(Locale.ROOT, "%.6f", player[0]));
+            sb.append(",\"player_y_ratio\":").append(String.format(Locale.ROOT, "%.6f", player[1]));
+        }
+        if (targetPoint != null)
+        {
+            sb.append(",\"target_x_ratio\":").append(String.format(Locale.ROOT, "%.6f", targetPoint[0]));
+            sb.append(",\"target_y_ratio\":").append(String.format(Locale.ROOT, "%.6f", targetPoint[1]));
+        }
+        return sb.toString();
+    }
+
+    private String withFocus(String fields, Actor target)
+    {
+        String base = fields == null ? "" : fields.trim();
+        return "{" + base + (base.isEmpty() ? "" : ",") + focusFields(target) + "}";
+    }
+
+    private void sendLoot(String type, String source, Collection<ItemStack> items, boolean applyMinimum, Actor focusActor)
     {
         List<String> rows = new ArrayList<>();
         long totalValue = 0;
@@ -317,10 +413,10 @@ public class PostalAutoClipPlugin extends Plugin
             return;
         }
 
-        String payload = "{\"source\":\"" + esc(source)
+        String fields = "\"source\":\"" + esc(source)
             + "\",\"total_value\":" + totalValue
-            + ",\"items\":[" + String.join(",", rows) + "]}";
-        send(type, 1.0, payload);
+            + ",\"items\":[" + String.join(",", rows) + "]";
+        send(type, 1.0, withFocus(fields, focusActor));
     }
 
     private void send(String eventType, double confidence, String payloadJson)
