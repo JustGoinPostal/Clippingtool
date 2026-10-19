@@ -23,6 +23,7 @@ dev = ["pytest>=8.3"]
 [project.scripts]
 postal-autoclip = "app.api:run"
 postal-autoclip-labeler = "app.benchmark_labeler:run"
+postal-autoclip-reference = "app.reference_research:main"
 
 [tool.setuptools]
 packages = ["app"]
