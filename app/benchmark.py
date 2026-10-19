@@ -88,9 +88,6 @@ def _label_coverage(label: MomentLabel, prediction: Prediction) -> float:
 
 
 def _captures(label: MomentLabel, prediction: Prediction, min_label_coverage: float) -> bool:
-    # A clip can successfully find a brief exact event even when the final clip is
-    # intentionally much longer than the annotated event window. Boundary quality is
-    # scored separately so recall is not confused with edit tightness.
     midpoint_inside = prediction.start <= label.midpoint <= prediction.end
     return midpoint_inside or _label_coverage(label, prediction) >= min_label_coverage
 
@@ -114,8 +111,6 @@ def evaluate_predictions(
     matched_predictions: set[int] = set()
     pairs: list[dict[str, Any]] = []
 
-    # Greedy in score order reflects what a creator actually sees first. A prediction
-    # is assigned to only one truth label; overlapping extra clips become duplicates.
     for rank, pred in enumerate(normalized_predictions, start=1):
         candidates = []
         for li, label in enumerate(normalized_labels):
@@ -162,6 +157,7 @@ def evaluate_predictions(
 
     boundary_ious = [float(p["boundary_iou"]) for p in pairs]
     typed_pairs = [p for p in pairs if p["label_event_type"] and p["predicted_event_type"]]
+    event_type_correct_count=sum(1 for p in typed_pairs if p["event_type_correct"])
     false_positive_count = max(0, total_predictions - len(matched_predictions) - duplicate_predictions)
 
     missed = [label.id for i, label in enumerate(normalized_labels) if i not in matched_labels]
@@ -172,6 +168,15 @@ def evaluate_predictions(
         "prediction_count": total_predictions,
         "matched_labels": len(matched_labels),
         "matched_predictions": len(matched_predictions),
+        "weight_total": round(weight_total,6),
+        "matched_weight": round(matched_weight,6),
+        "top_k_matched_labels": len(top_k_labels),
+        "duplicate_predictions": duplicate_predictions,
+        "false_positive_count": false_positive_count,
+        "typed_match_count": len(typed_pairs),
+        "event_type_correct_count": event_type_correct_count,
+        "boundary_match_count": len(boundary_ious),
+        "boundary_iou_sum": round(sum(boundary_ious),6),
         "recall": round(len(matched_labels) / total_labels, 4) if total_labels else 1.0,
         "weighted_recall": round(matched_weight / weight_total, 4) if weight_total else 1.0,
         "precision": round(len(matched_predictions) / total_predictions, 4) if total_predictions else (1.0 if not total_labels else 0.0),
@@ -180,7 +185,7 @@ def evaluate_predictions(
         "duplicate_prediction_rate": round(duplicate_predictions / total_predictions, 4) if total_predictions else 0.0,
         "false_positive_rate": round(false_positive_count / total_predictions, 4) if total_predictions else 0.0,
         "mean_boundary_iou": round(sum(boundary_ious) / len(boundary_ious), 4) if boundary_ious else 0.0,
-        "event_type_accuracy": round(sum(1 for p in typed_pairs if p["event_type_correct"]) / len(typed_pairs), 4) if typed_pairs else None,
+        "event_type_accuracy": round(event_type_correct_count / len(typed_pairs), 4) if typed_pairs else None,
         "missed_label_ids": missed,
         "unmatched_prediction_indexes": unmatched,
         "matches": pairs,
