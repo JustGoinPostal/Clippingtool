@@ -12,7 +12,7 @@ def _ffmpeg_filter_path(path: Path) -> str:
 
 
 def test_real_ffmpeg_finished_render_passes_commercial_qa(tmp_path: Path):
-    """Exercise the actual FFmpeg/libass/cropdetect/signalstats QA path, not mocks."""
+    """Exercise the actual FFmpeg/libass/pixel/audio QA path, not mocks."""
     s=Settings(
         render_width=720,
         render_height=1280,
@@ -71,4 +71,6 @@ def test_real_ffmpeg_finished_render_passes_commercial_qa(tmp_path: Path):
     assert result["checks"]["caption_pixels"]["lower"]
     assert result["checks"]["webcam_pixels"]["border"]["median"] >= s.render_qa_webcam_border_min_luma
     assert result["checks"]["audio_levels"]["mean_db"] is not None
+    assert result["checks"]["audio_saturation"]["hard_fullscale_ratio"] < s.render_qa_saturation_warning_ratio
+    assert result["checks"]["audio_saturation"]["longest_hard_run"] < s.render_qa_saturation_block_run_samples
     assert result["checks"]["freeze_frames"]["max_seconds"] <= s.render_qa_max_freeze_seconds
