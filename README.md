@@ -202,7 +202,7 @@ Publishing uses a local Google Desktop OAuth client at:
 
 `secrets/youtube_client_secret.json`
 
-YouTube publishing keeps its narrow upload scope. Public-reference discovery uses a separate read-only API-key path instead of silently increasing every creator's OAuth permissions.
+YouTube publishing keeps its narrow upload scope. Public-reference discovery uses a separate API-key path instead of silently increasing every creator's OAuth permissions.
 
 YouTube analytics uses the separate local read-only analytics flow:
 
