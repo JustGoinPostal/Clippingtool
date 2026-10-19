@@ -41,7 +41,7 @@ public interface PostalAutoClipConfig extends Config
         return 100000;
     }
 
-    @ConfigItem(keyName = "sendChat", name = "Important chat messages", description = "Send likely collection-log/drop/raid/death chat messages")
+    @ConfigItem(keyName = "sendChat", name = "Important chat messages", description = "Send likely collection-log/drop/raid/death/achievement chat messages")
     default boolean sendChat()
     {
         return true;
@@ -58,5 +58,18 @@ public interface PostalAutoClipConfig extends Config
     default int focusSampleTicks()
     {
         return 2;
+    }
+
+    @ConfigItem(keyName = "stateTelemetry", name = "OSRS state telemetry", description = "Send local HP/prayer/world position and current target so AutoClip can recognize escapes and encounter context")
+    default boolean stateTelemetry()
+    {
+        return true;
+    }
+
+    @Range(min = 1, max = 20)
+    @ConfigItem(keyName = "stateSampleTicks", name = "State sample ticks", description = "Send one lightweight local state sample every N game ticks")
+    default int stateSampleTicks()
+    {
+        return 3;
     }
 }
