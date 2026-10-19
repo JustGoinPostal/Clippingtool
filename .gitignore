@@ -9,6 +9,7 @@ data/input/*
 data/output/*
 data/cache/*
 data/covers/*
+data/benchmark_labels/*
 data/*.db
 !data/input/.gitkeep
 !data/output/.gitkeep
