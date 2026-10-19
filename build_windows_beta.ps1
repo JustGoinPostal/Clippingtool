@@ -1,10 +1,13 @@
 param(
-  [string]$Version = "0.9.0-beta"
+  [string]$Version = "0.9.0-beta",
+  [string]$ReleaseTag = ""
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
+if (-not $ReleaseTag) { $ReleaseTag = "v$Version" }
+$requireSigning = $env:POSTAL_REQUIRE_SIGNING -eq '1'
 
 Write-Host "== Postal AutoClip Windows beta build ==" -ForegroundColor Cyan
 python -m pip install --upgrade pip wheel
@@ -16,7 +19,9 @@ Write-Host "Bundling FFmpeg: $ffmpeg"
 Write-Host "Bundling FFprobe: $ffprobe"
 
 Remove-Item -Recurse -Force .\build\pyinstaller -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force .\build\pyinstaller-updater -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force .\dist\PostalAutoClip -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force .\dist\Updater -ErrorAction SilentlyContinue
 
 $pyi = @(
   '--noconfirm', '--clean', '--onedir', '--windowed',
@@ -40,6 +45,18 @@ $pyi = @(
 )
 python -m PyInstaller @pyi
 
+$updaterPyi = @(
+  '--noconfirm', '--clean', '--onefile', '--windowed',
+  '--name', 'PostalAutoClipUpdater',
+  '--distpath', '.\dist\Updater',
+  '--workpath', '.\build\pyinstaller-updater',
+  '--specpath', '.\build',
+  '--hidden-import', 'packaging.version',
+  '.\updater_entry.py'
+)
+python -m PyInstaller @updaterPyi
+Copy-Item '.\dist\Updater\PostalAutoClipUpdater.exe' '.\dist\PostalAutoClip\PostalAutoClipUpdater.exe' -Force
+
 $rl = Get-ChildItem '.\runelite-companion\build\libs\PostalAutoClipCompanion-*-all.jar' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($rl) {
   New-Item -ItemType Directory -Force '.\dist\PostalAutoClip\RuneLite' | Out-Null
@@ -54,6 +71,11 @@ Built: $(Get-Date -Format o)
 Persistent data: %LOCALAPPDATA%\PostalAutoClip
 "@ | Set-Content '.\dist\PostalAutoClip\BUILD_INFO.txt' -Encoding UTF8
 
+& '.\scripts\sign_windows.ps1' -Files @(
+  '.\dist\PostalAutoClip\PostalAutoClip.exe',
+  '.\dist\PostalAutoClip\PostalAutoClipUpdater.exe'
+) -RequireSigning:$requireSigning
+
 $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
 if (-not $iscc) {
   foreach ($candidate in @(
@@ -67,5 +89,29 @@ if (-not $iscc) { throw 'Inno Setup 6 compiler (ISCC.exe) was not found.' }
 
 New-Item -ItemType Directory -Force '.\installer\output' | Out-Null
 & $iscc.Source "/DAppVersion=$Version" '.\installer\PostalAutoClip.iss'
-$installer = Resolve-Path '.\installer\output\PostalAutoClip-Beta-Setup.exe'
+$installer = (Resolve-Path '.\installer\output\PostalAutoClip-Beta-Setup.exe').Path
+
+& '.\scripts\sign_windows.ps1' -Files @($installer) -RequireSigning:$requireSigning
+
+$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+$signature = Get-AuthenticodeSignature -LiteralPath $installer
+$subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' }
+if ($requireSigning -and ($signature.Status -ne 'Valid' -or -not $subject)) {
+  throw "Release signing was required but final installer signature is not valid: $($signature.Status)"
+}
+$assetName = 'PostalAutoClip-Beta-Setup.exe'
+$base = "https://github.com/JustGoinPostal/Clippingtool/releases/download/$ReleaseTag"
+$manifest = [ordered]@{
+  schema_version = 1
+  version = $Version
+  channel = 'beta'
+  installer_url = "$base/$assetName"
+  sha256 = $hash
+  signer_subject = $subject
+  release_notes_url = "https://github.com/JustGoinPostal/Clippingtool/releases/tag/$ReleaseTag"
+}
+$manifest | ConvertTo-Json -Depth 5 | Set-Content '.\installer\output\postal-autoclip-update.json' -Encoding UTF8
+
 Write-Host "Installer ready: $installer" -ForegroundColor Green
+Write-Host "SHA256: $hash" -ForegroundColor Green
+Write-Host "Signer: $subject" -ForegroundColor Green
