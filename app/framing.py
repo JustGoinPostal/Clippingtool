@@ -69,9 +69,10 @@ def build_focus_keyframes(game_events: list[dict] | None, start: float, end: flo
     return compact[:120]
 
 
-def focus_ratio_expression(keyframes: list[dict[str,float]], axis: str = "x") -> str:
+def focus_ratio_expression(keyframes: list[dict[str,float]], axis: str = "x", time_var: str = "t") -> str:
     """Build a smooth piecewise-linear FFmpeg expression for one focus axis."""
     key="y" if str(axis).lower()=="y" else "x"
+    tv=str(time_var or "t")
     if not keyframes:
         return "0.5"
     if len(keyframes)==1:
@@ -82,29 +83,30 @@ def focus_ratio_expression(keyframes: list[dict[str,float]], axis: str = "x") ->
         t0=float(a["time"]); t1=float(b["time"])
         x0=float(a.get(key,0.5)); x1=float(b.get(key,0.5))
         dt=max(0.001,t1-t0)
-        interp=f"({x0:.6f}+({x1-x0:.6f})*max(0,min(1,(t-{t0:.3f})/{dt:.3f})))"
+        interp=f"({x0:.6f}+({x1-x0:.6f})*max(0,min(1,(({tv})-{t0:.3f})/{dt:.3f})))"
         if i==len(keyframes)-2:
-            return f"if(lt(t,{t1:.3f}),{interp},{x1:.6f})"
-        return f"if(lt(t,{t1:.3f}),{interp},{segment(i+1)})"
+            return f"if(lt(({tv}),{t1:.3f}),{interp},{x1:.6f})"
+        return f"if(lt(({tv}),{t1:.3f}),{interp},{segment(i+1)})"
 
     first=keyframes[0]
     body=segment(0)
     if float(first["time"]) > 0.001:
-        body=f"if(lt(t,{float(first['time']):.3f}),{float(first.get(key,0.5)):.6f},{body})"
+        body=f"if(lt(({tv}),{float(first['time']):.3f}),{float(first.get(key,0.5)):.6f},{body})"
     return body
 
 
-def focus_y_ratio_expression(keyframes: list[dict[str,float]]) -> str:
-    return focus_ratio_expression(keyframes,"y")
+def focus_y_ratio_expression(keyframes: list[dict[str,float]], time_var: str = "t") -> str:
+    return focus_ratio_expression(keyframes,"y",time_var)
 
 
 def crop_x_expression(keyframes: list[dict[str,float]]) -> str:
     """Center a vertical crop on the RuneLite focus ratio while clamping to source bounds."""
-    ratio=focus_ratio_expression(keyframes,"x")
+    ratio=focus_ratio_expression(keyframes,"x","t")
     return f"max(0,min(iw-ow,iw*({ratio})-ow/2))"
 
 
-def zoompan_y_expression(keyframes: list[dict[str,float]]) -> str:
+def zoompan_y_expression(keyframes: list[dict[str,float]], fps: float = 30.0) -> str:
     """Keep RuneLite's vertical subject near center during zoom without leaving frame bounds."""
-    ratio=focus_y_ratio_expression(keyframes)
+    time_var=f"on/{max(1.0,float(fps)):.6f}"
+    ratio=focus_y_ratio_expression(keyframes,time_var)
     return f"max(0,min(ih-ih/zoom,ih*({ratio})-ih/(2*zoom)))"
