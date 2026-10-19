@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import secrets
 import threading
 import time
@@ -12,6 +11,7 @@ from urllib.parse import urlencode
 import httpx
 
 from .config import ROOT, load_settings
+from .secure_store import SecureStoreError, read_secure_json, secure_storage_status, write_secure_json
 
 SECRETS = ROOT / "secrets"
 CACHE = ROOT / "data" / "cache"
@@ -19,11 +19,13 @@ TIKTOK_APP = SECRETS / "tiktok_app.json"
 TIKTOK_TOKEN = SECRETS / "tiktok_token.json"
 INSTAGRAM_APP = SECRETS / "instagram_app.json"
 INSTAGRAM_TOKEN = SECRETS / "instagram_token.json"
-TIKTOK_OAUTH = CACHE / "tiktok_oauth.json"
-INSTAGRAM_OAUTH = CACHE / "instagram_oauth.json"
+# OAuth state contains PKCE/state material too, so keep it in the protected
+# credential directory instead of the general media/model cache.
+TIKTOK_OAUTH = SECRETS / "tiktok_oauth_pending.json"
+INSTAGRAM_OAUTH = SECRETS / "instagram_oauth_pending.json"
 
-TIKTOK_DEFAULT_REDIRECT = "http://127.0.0.1:8787/api/publishing/tiktok/callback"
-INSTAGRAM_DEFAULT_REDIRECT = "http://127.0.0.1:8787/api/publishing/instagram/callback"
+TIKTOK_DEFAULT_REDIRECT = "http://127.0.0.1:8790/tiktok/callback"
+INSTAGRAM_DEFAULT_REDIRECT = "http://127.0.0.1:8790/instagram/callback"
 TIKTOK_SCOPES = ["user.info.basic", "video.list", "video.publish"]
 INSTAGRAM_SCOPES = [
     "pages_show_list",
@@ -38,19 +40,18 @@ _maintenance_lock = threading.Lock()
 
 
 def _read(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+        return read_secure_json(path)
+    except SecureStoreError:
         return {}
 
 
 def _write(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    write_secure_json(path, data)
+
+
+def credential_storage_status() -> dict[str, Any]:
+    return secure_storage_status()
 
 
 def app_config_status() -> dict[str, Any]:
@@ -59,6 +60,7 @@ def app_config_status() -> dict[str, Any]:
     tt_token = _read(TIKTOK_TOKEN)
     ig_token = _read(INSTAGRAM_TOKEN)
     return {
+        "credential_storage": credential_storage_status(),
         "tiktok": {
             "configured": bool(tt.get("client_key") and tt.get("client_secret")),
             "client_key": str(tt.get("client_key") or ""),
@@ -102,7 +104,6 @@ def save_app_config(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pkce_verifier() -> str:
-    # token_urlsafe(64) yields a verifier inside TikTok's 43-128 character requirement.
     return secrets.token_urlsafe(64)
 
 
@@ -155,10 +156,7 @@ def finish_tiktok_oauth(code: str, state: str) -> dict[str, Any]:
     data["refresh_expires_at"] = now + float(data.get("refresh_expires_in") or 0)
     data["connected_at"] = now
     _write(TIKTOK_TOKEN, data)
-    try:
-        TIKTOK_OAUTH.unlink(missing_ok=True)
-    except Exception:
-        pass
+    TIKTOK_OAUTH.unlink(missing_ok=True)
     return {"ok": True, "open_id": data.get("open_id", ""), "scope": data.get("scope", "")}
 
 
@@ -288,10 +286,7 @@ def finish_instagram_oauth(code: str, state: str) -> dict[str, Any]:
         "connected_at": time.time(),
     }
     _write(INSTAGRAM_TOKEN, stored)
-    try:
-        INSTAGRAM_OAUTH.unlink(missing_ok=True)
-    except Exception:
-        pass
+    INSTAGRAM_OAUTH.unlink(missing_ok=True)
     return {"ok": True, "username": first["username"], "page_name": first["page_name"], "choices": len(choices)}
 
 
