@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 RARE_ITEMS = (
@@ -24,6 +25,21 @@ def _item_name(text: str) -> str:
     return ""
 
 
+def _clip_context(clip: dict) -> dict:
+    ctx=clip.get("event_context")
+    if isinstance(ctx,dict):
+        return ctx
+    raw=clip.get("event_context_json")
+    if isinstance(raw,str) and raw.strip():
+        try:
+            parsed=json.loads(raw)
+            if isinstance(parsed,dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
+
+
 def _context_item(ctx: dict) -> str:
     if ctx.get("name") and str(ctx.get("moment_archetype") or "") == "reward_reveal":
         return str(ctx["name"]).strip().upper()
@@ -45,7 +61,7 @@ def _gp(value) -> str:
 def generate_hook(clip: dict) -> str:
     """Generate a short OSRS-aware overlay hook with no paid/cloud dependency."""
     event=str(clip.get("event_type") or "speech").lower()
-    ctx=clip.get("event_context") if isinstance(clip.get("event_context"),dict) else {}
+    ctx=_clip_context(clip)
     archetype=str(clip.get("story_archetype") or ctx.get("moment_archetype") or "")
     text=" ".join([
         str(clip.get("title") or ""),
