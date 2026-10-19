@@ -38,6 +38,34 @@ def test_save_load_labels_is_local_and_atomic(tmp_path: Path, monkeypatch):
     assert not (tmp_path/"labels"/"job_7.labels.tmp").exists()
 
 
+def test_legacy_label_draft_without_provenance_fails_closed(tmp_path: Path, monkeypatch):
+    label_dir=tmp_path/"labels"; label_dir.mkdir()
+    monkeypatch.setattr(benchmark_labeler,"LABEL_DIR",label_dir)
+    legacy={"schema_version":1,"job_id":12,"labels":[
+        {"id":"old","start":1,"end":3,"event_type":"pvp_kill","weight":1.0}
+    ]}
+    (label_dir/"job_12.labels.json").write_text(json.dumps(legacy),encoding="utf-8")
+    state=benchmark_labeler.load_label_state(12)
+    assert state["assisted"] is True
+    assert state["labels"][0]["id"]=="old"
+
+    # The pre-schema list format is also untrusted for held-out provenance.
+    (label_dir/"job_13.labels.json").write_text(json.dumps(legacy["labels"]),encoding="utf-8")
+    assert benchmark_labeler.load_label_state(13)["assisted"] is True
+
+
+def test_corrupt_existing_provenance_stays_tuning_only_after_resave(tmp_path: Path, monkeypatch):
+    label_dir=tmp_path/"labels"; label_dir.mkdir()
+    monkeypatch.setattr(benchmark_labeler,"LABEL_DIR",label_dir)
+    monkeypatch.setattr(benchmark_labeler,"_job",lambda job_id:{"id":job_id,"source_path":"vod.mp4"})
+    (label_dir/"job_14.labels.json").write_text("{not json",encoding="utf-8")
+    assert benchmark_labeler.load_label_state(14)["assisted"] is True
+    benchmark_labeler.save_labels(14,[
+        {"id":"rebuilt","start":4,"end":9,"event_type":"boss_kill","weight":1.0}
+    ])
+    assert benchmark_labeler.load_label_state(14)["assisted"] is True
+
+
 def test_revealing_predictions_permanently_marks_label_draft_assisted(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(benchmark_labeler,"LABEL_DIR",tmp_path/"labels")
     monkeypatch.setattr(benchmark_labeler,"_job",lambda job_id:{"id":job_id,"source_path":"vod.mp4"})
