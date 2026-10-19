@@ -26,6 +26,8 @@ def _osrs_title(candidate: dict, fallback: str) -> str:
     archetype=str(candidate.get("story_archetype") or ctx.get("moment_archetype") or "")
     name=str(ctx.get("name") or ctx.get("source") or "").strip()
     opponent=str(ctx.get("opponent_name") or name).strip()
+    encounter=str(ctx.get("encounter") or "").strip()
+    activity=str(ctx.get("activity") or "").strip()
     item=_item(ctx)
     value=_gp(ctx.get("loot_value") or ctx.get("total_value"))
     biggest=int(float(ctx.get("biggest_setup_hit",ctx.get("amount",0)) or 0))
@@ -49,31 +51,50 @@ def _osrs_title(candidate: dict, fallback: str) -> str:
         return "I Should Not Have Survived This"
     if archetype == "pet_reveal" or event_type == "pet_drop":
         if item and item.lower() != "pet": return f"We Actually Got {item}"
+        if activity: return f"The {activity} Pet Finally Dropped"
         return "The Pet Finally Dropped"
     if archetype == "reward_reveal":
         if item and name and item.lower() != name.lower(): return f"{item} From {name}"
+        if item and activity: return f"{item} From {activity}"
         if item: return f"We Actually Got {item}"
+        if value and activity: return f"A {value} Drop From {activity}"
         if value: return f"A {value} Drop Out of Nowhere"
     if archetype == "death_collapse":
         hit=int(float(ctx.get("biggest_hit_taken",0) or 0))
+        if encounter and hit>=45: return f"A {hit} Hit at {encounter} Ended the Run"
         return f"A {hit} Hit Ended the Run" if hit >= 45 else "This Death Happened Fast"
-    if event_type == "combat_achievement": return "Combat Task Completed"
-    if event_type == "personal_best": return "New OSRS Personal Best"
+    if event_type == "combat_achievement":
+        return f"Combat Task at {encounter} Completed" if encounter else "Combat Task Completed"
+    if event_type == "personal_best":
+        return f"New {activity} Personal Best" if activity else "New OSRS Personal Best"
     if event_type == "quest_complete": return "Quest Complete"
     if event_type == "skill_milestone":
         msg=str(ctx.get("message") or "")
         if re.search(r"\b99\b",msg): return "99 Finally Achieved"
         return "Another OSRS Milestone Done"
-    if event_type == "boss_kill" and name: return f"{name} Down"
+    if event_type == "boss_kill" and (name or encounter): return f"{name or encounter} Down"
     if event_type == "big_hit" and biggest >= 50:
-        return f"{biggest} Damage in One Hit"
+        return f"{biggest} Damage at {encounter}" if encounter else f"{biggest} Damage in One Hit"
     return fallback
+
+
+def _activity_tag(key: str) -> str:
+    return {
+        "cox":"#ChambersOfXeric",
+        "tob":"#TheatreOfBlood",
+        "toa":"#TombsOfAmascut",
+        "inferno":"#Inferno",
+        "colosseum":"#FortisColosseum",
+        "cg":"#CorruptedGauntlet",
+        "nex":"#Nex",
+    }.get(key,"")
 
 
 def make_metadata(candidate: dict):
     text=re.sub(r"\s+"," ",candidate.get("transcript","")).strip()
     event_type=str(candidate.get("event_type") or "speech")
     event_summary=re.sub(r"\s+"," ",candidate.get("event_summary","")).strip()
+    ctx=candidate.get("event_context") if isinstance(candidate.get("event_context"),dict) else {}
     hook=text[:90].strip(" ,.-")
     if not hook and event_summary:
         hook=event_summary.split(":",1)[-1].strip()
@@ -87,9 +108,11 @@ def make_metadata(candidate: dict):
         title=title[:97].rsplit(" ",1)[0]+"..."
 
     tags=["#OSRS","#RuneScape","#Gaming","#Shorts"]
+    activity_tag=_activity_tag(str(ctx.get("activity_key") or ""))
+    if activity_tag: tags.insert(2,activity_tag)
     low=text.lower()+" "+event_summary.lower()+" "+str(candidate.get("story_archetype") or "").lower()
     if event_type in {"pvp_kill","pvp_escape","player_loot"} or any(x in low for x in ["pk","pker","kill","smite"]): tags.insert(2,"#OSRSPvP")
-    if event_type in {"raid_reward","raid_complete"} or any(x in low for x in ["cox","tob","toa","raid","chambers","theatre of blood","tombs of amascut"]): tags.insert(2,"#OSRSRaids")
+    if event_type in {"raid_reward","raid_complete"} or str(ctx.get("activity_key") or "") in {"cox","tob","toa"} or any(x in low for x in ["cox","tob","toa","raid","chambers","theatre of blood","tombs of amascut"]): tags.insert(2,"#OSRSRaids")
     if event_type in {"pet_drop","rare_drop","collection_log","raid_reward"}: tags.insert(2,"#OSRSDrops")
     if str(candidate.get("story_archetype") or "") in {"high_value_pk","pvp_smite"}: tags.insert(2,"#PKing")
     if event_type in {"combat_achievement","skill_milestone","quest_complete","personal_best"}: tags.insert(2,"#OSRSAchievements")
