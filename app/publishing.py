@@ -344,13 +344,29 @@ def recover_interrupted_posts() -> int:
 
 
 def process_due_posts(limit:int=5):
+    """Process due posts with per-job isolation.
+
+    Creator-trust guards (including render QA) run before any platform call. If a
+    guard quarantines one row or any unexpected preflight error occurs, that row
+    cannot abort the rest of the due batch.
+    """
     now=time.time(); s=load_settings()
     rows=db.q("""SELECT * FROM publish_queue
                   WHERE status='queued' AND scheduled_for<=? AND (next_attempt_at<=0 OR next_attempt_at<=?)
                   ORDER BY scheduled_for,id LIMIT ?""",(now,now,int(limit)))
     for row in rows:
         job_id=int(row["id"]); attempts=int(row.get("attempts") or 0)+1
-        db.update_publish_job(job_id,status="publishing",attempts=attempts,error="",last_attempt_at=time.time())
+        try:
+            db.update_publish_job(job_id,status="publishing",attempts=attempts,error="",last_attempt_at=time.time())
+        except Exception as e:
+            current=db.q("SELECT * FROM publish_queue WHERE id=?",(job_id,),one=True) or {}
+            if str(current.get("status") or "") != "needs_review":
+                try:
+                    db.update_publish_job(job_id,status="needs_review",next_attempt_at=0,
+                        error=f"Preflight blocked before platform call: {type(e).__name__}: {e}")
+                except Exception:
+                    pass
+            continue
         try:
             result=_publish_one(row); asynchronous=bool(result.get("async"))
             db.update_publish_job(job_id,status="submitted" if asynchronous else "published",
