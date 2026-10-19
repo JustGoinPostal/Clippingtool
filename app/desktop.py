@@ -10,7 +10,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from .paths import APP_HOME, LOG_DIR, PROGRAM_ROOT, ensure_app_home
+from .paths import APP_HOME, LOG_DIR, PROGRAM_ROOT, RESOURCE_ROOT, ensure_app_home
 
 SETUP_STATE = APP_HOME / "setup.json"
 
@@ -103,15 +103,20 @@ def self_test() -> dict[str, object]:
     from .config import load_settings
     from . import db
     from .secure_store import dpapi_roundtrip_self_test, secure_storage_status
-    # Import the actual API graph so a frozen build missing any application
-    # dependency/module fails here before an update is committed.
     from .api import app as api_app
 
     settings = load_settings(); db.init_db()
-    if not getattr(api_app, "title", ""):
-        raise RuntimeError("FastAPI application graph did not initialize")
-    static_index = APP_HOME / "app" / "static" / "index.html"
-    if not static_index.exists(): raise RuntimeError(f"Dashboard resource is missing: {static_index}")
+    if not getattr(api_app, "title", ""): raise RuntimeError("FastAPI application graph did not initialize")
+
+    runtime_index = APP_HOME / "app" / "static" / "index.html"
+    if not runtime_index.exists(): raise RuntimeError(f"Runtime dashboard resource is missing: {runtime_index}")
+    # On a frozen build also verify the immutable packaged source. Otherwise a
+    # stale AppData copy from the previous version could hide a broken package and
+    # let the updater commit an unusable installation.
+    if getattr(sys, "frozen", False):
+        packaged_index = RESOURCE_ROOT / "app" / "static" / "index.html"
+        if not packaged_index.exists(): raise RuntimeError(f"Packaged dashboard resource is missing: {packaged_index}")
+
     for tool in ("ffmpeg", "ffprobe"):
         cp = subprocess.run([tool, "-version"], capture_output=True, text=True, timeout=20)
         if cp.returncode != 0: raise RuntimeError(f"{tool} self-test failed")
@@ -120,7 +125,7 @@ def self_test() -> dict[str, object]:
         updater = PROGRAM_ROOT / "PostalAutoClipUpdater.exe"
         if not updater.exists(): raise RuntimeError(f"Updater executable is missing: {updater}")
     probe = APP_HOME / "data" / ".self-test-write"; probe.write_text("ok", encoding="utf-8"); probe.unlink(missing_ok=True)
-    return {"ok": True, "program_root": str(PROGRAM_ROOT), "data_root": str(APP_HOME), "watch_folder": str(settings.watch_path), "output_folder": str(settings.output_path), "credential_storage": secure_storage_status()}
+    return {"ok": True, "program_root": str(PROGRAM_ROOT), "data_root": str(APP_HOME), "resource_root": str(RESOURCE_ROOT), "watch_folder": str(settings.watch_path), "output_folder": str(settings.output_path), "credential_storage": secure_storage_status()}
 
 
 def run() -> None:
