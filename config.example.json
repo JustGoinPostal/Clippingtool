@@ -104,6 +104,9 @@
   "synchronized_crosspost_enabled": true,
   "platform_fit_enabled": true,
   "platform_variant_min_samples": 3,
+  "auto_update_enabled": true,
+  "update_check_hours": 6.0,
+  "update_manifest_url": "https://github.com/JustGoinPostal/Clippingtool/releases/latest/download/postal-autoclip-update.json",
   "ollama_url": "http://127.0.0.1:11434",
   "ollama_model": "",
   "keywords": {
