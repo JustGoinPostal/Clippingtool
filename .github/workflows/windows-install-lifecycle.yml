@@ -71,7 +71,7 @@ jobs:
         run: |
           $installer = "$env:RUNNER_TEMP\PostalAutoClip-base.exe"
           $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
-          if ($proc.ExitCode -notin @(0,5)) { throw "Base installer failed: $($proc.ExitCode)" }
+          if ($proc.ExitCode -ne 0) { throw "Base installer failed with Inno Setup exit code $($proc.ExitCode)" }
           $exe = "$env:LOCALAPPDATA\Programs\Postal AutoClip\PostalAutoClip.exe"
           if (-not (Test-Path $exe)) { throw 'Installed PostalAutoClip.exe is missing.' }
           $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
@@ -91,7 +91,7 @@ jobs:
         run: |
           $installer = "$env:RUNNER_TEMP\PostalAutoClip-update.exe"
           $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS' -Wait -PassThru
-          if ($proc.ExitCode -notin @(0,5)) { throw "Update installer failed: $($proc.ExitCode)" }
+          if ($proc.ExitCode -ne 0) { throw "Update installer failed with Inno Setup exit code $($proc.ExitCode)" }
           $exe = "$env:LOCALAPPDATA\Programs\Postal AutoClip\PostalAutoClip.exe"
           $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
           if ($test.ExitCode -ne 0) { throw "Updated build self-test failed: $($test.ExitCode)" }
@@ -115,7 +115,7 @@ jobs:
         run: |
           $installer = "$env:RUNNER_TEMP\PostalAutoClip-update.exe"
           $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
-          if ($proc.ExitCode -notin @(0,5)) { throw "Reinstall failed: $($proc.ExitCode)" }
+          if ($proc.ExitCode -ne 0) { throw "Reinstall failed with Inno Setup exit code $($proc.ExitCode)" }
           $exe = "$env:LOCALAPPDATA\Programs\Postal AutoClip\PostalAutoClip.exe"
           $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
           if ($test.ExitCode -ne 0) { throw "Reinstalled build self-test failed: $($test.ExitCode)" }
