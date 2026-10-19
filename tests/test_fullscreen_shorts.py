@@ -16,8 +16,24 @@ def test_fullscreen_gameplay_uses_entire_vertical_frame(monkeypatch):
     assert "x='(iw-ow)/2'" in graph
 
 
-def test_fullscreen_gameplay_puts_webcam_top_center(monkeypatch):
-    s = Settings(layout="osrs_focus")
+def test_auto_webcam_never_overlays_guessed_runelite_ui(monkeypatch):
+    s = Settings(layout="osrs_focus", webcam_region="auto")
+    monkeypatch.setattr(
+        render_fullscreen,
+        "_webcam_crop",
+        lambda *args, **kwargs: ("bottom_left", "crop=320:180:10:500"),
+    )
+    graph, region, mode = render_fullscreen._full_game_filter(
+        None, 0.0, {"event_type": "combat", "features_json": "{}"}, "C\\:/tmp/captions.ass", s, 22.0
+    )
+    assert mode == "gameplay_fullscreen"
+    assert region == ""
+    assert "overlay=" not in graph
+    assert "crop=320:180:10:500" not in graph
+
+
+def test_explicit_webcam_region_puts_camera_top_center(monkeypatch):
+    s = Settings(layout="osrs_focus", webcam_region="top_right")
     monkeypatch.setattr(render_fullscreen, "_webcam_crop", lambda *args, **kwargs: ("top_right", "crop=320:180:900:20"))
     monkeypatch.setattr(render_fullscreen, "_reaction_only_source", lambda *args, **kwargs: False)
     graph, region, mode = render_fullscreen._full_game_filter(
