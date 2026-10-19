@@ -19,6 +19,10 @@ on:
       - '.github/workflows/windows-install-lifecycle.yml'
       - '.github/workflows/windows-installer.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lifecycle:
     runs-on: windows-latest
