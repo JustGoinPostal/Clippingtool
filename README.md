@@ -1,34 +1,113 @@
-# Postal AutoClip v0.8
+# Postal AutoClip v0.9
 
-Postal AutoClip is a clean-room, local-first OSRS/RuneLite stream clipping and social-distribution tool. It can watch OBS recordings, detect moments, learn from Keep/Great/Reject decisions, render multiple vertical versions, pick the BEST edit, generate covers, cross-post the same strong clip to YouTube Shorts, TikTok and Instagram Reels, and now learn from real audience performance.
+Postal AutoClip is a local-first **Old School RuneScape-specific** clipping and social-distribution application. It combines RuneLite telemetry, audio reactions, local Whisper transcription, targeted video analysis, OSRS story logic, finished-video QA, social publishing and audience learning.
 
-No facecam is required.
+The goal is not to be a generic clip cutter with an OSRS skin. AutoClip should understand why an OSRS moment matters: the PK payoff, loot value, raid/boss context, pet, collection-log slot, achievement, death, close escape or streamer reaction.
 
-## v0.8 strategy
+> v0.9 is a hardening preview. The `production-hardening` work remains draft until the creator-ready gates in issue #2 are satisfied.
 
-The default marketing model is now **one strong moment -> all selected platforms**. Cross-posting the same original clip is not treated as duplication. The duplicate guard is platform-aware, so a clip already posted to YouTube can still be scheduled to TikTok and Instagram.
+## What v0.9 understands
 
-Platform-specific packaging can still differ: title/caption, hashtags, privacy, cover treatment and schedule. The underlying clean master clip stays the same.
+### RuneLite-first OSRS intelligence
 
-## v0.8 highlights
+- Confirmed local PvP kills using locally-attributed damage instead of guessing every player death is your kill.
+- Big outgoing/incoming hits and player/NPC loot.
+- PK story clustering: setup hit -> confirmed kill -> loot/reaction.
+- High-value PK scoring using loot value without allowing one huge outlier to dominate the model forever.
+- Smite story promotion only when a confirmed PK is independently corroborated by the creator's local transcript (`smite`, `smited`, `no prayer`, etc.). AutoClip does **not** pretend RuneLite exposes an opponent's prayer points.
+- Close-escape inference that requires recent PvP, incoming damage, dangerous HP, meaningful world movement, disengagement and survival. Inferred events are explicitly marked as inferred.
+- Raid/reward clustering for CoX/ToB/ToA rewards, rares and collection-log events.
+- Pet drops, combat achievements, personal bests, skill milestones, quest completions and boss kills.
+- RuneLite HP/prayer/world-position/current-target telemetry for encounter context.
+- Encounter enrichment for major raids and bosses, including Olm/CoX, ToB rooms/Verzik, ToA paths/Wardens, Inferno/Zuk, Colosseum/Sol and many standalone bosses.
+- Personality/reaction moments remain eligible even when RuneLite has no exact event.
 
-- Audience analytics collectors for YouTube, TikTok and Instagram.
-- YouTube metrics can include views, engaged views, likes, comments, shares, average view duration, average view percentage and subscribers gained.
-- TikTok owned-video metrics use `video.list` and include views, likes, comments and shares when a public post ID is available.
-- Instagram Reel insights are requested defensively one metric at a time so one unsupported/deprecated metric does not break the whole collector.
-- Local analytics history stored in SQLite.
-- Cross-platform performance score from views, weighted engagement and retention where available.
-- Once there is enough history, performance is partly normalized against your own results on that platform.
-- Audience-performance signals blend into future clip ranking instead of replacing your explicit Keep/Great/Reject preferences.
-- Analytics do not influence ranking until a post is old enough and has enough views.
-- Automatic background analytics refresh while Postal AutoClip is running.
-- New local analytics dashboard at `http://127.0.0.1:8787/static/analytics.html`.
-- Manual analytics refresh and YouTube-analytics OAuth helper scripts.
-- Distribution API now defaults to YouTube + TikTok + Instagram when platforms are not explicitly supplied.
+### OSRS-aware editing
 
-## Full pipeline
+- Event-specific clip windows instead of forcing every moment into the same duration.
+- RuneLite X **and Y** player/target focus for vertical smart framing.
+- Exact event-timed payoff zooms when authoritative event timing exists.
+- 22s / 38s / 58s render variants and automatic BEST selection.
+- OSRS-context hooks/titles using item, target, damage, GP value, smite/escape, raid/boss and achievement context.
+- Animated captions and calibrated real webcam overlay; AutoClip does not invent a facecam or guess arbitrary RuneLite UI regions.
 
-`OBS + optional RuneLite events -> audio/video/Whisper analysis -> candidate scoring -> taste + audience learning -> hook/editor -> 22s/38s/58s renders -> BEST render -> cover -> cross-platform weekly plan -> YouTube/TikTok/Instagram -> analytics -> better future ranking`
+### Finished-render QA
+
+AutoClip inspects the **encoded MP4**, not just the edit plan, before allowing automatic publishing. Current QA checks include:
+
+- video and audio stream presence
+- vertical resolution / near-9:16 aspect
+- encoded duration vs intended edit window
+- prolonged black frames / black-frame ratio
+- effectively silent audio
+- caption group width and safe margins
+- hook length / top margin
+- RuneLite-guided camera travel and excessive framing speed
+
+Each render stores `qa_status` and detailed findings. Only `PASS` renders can become BEST or enter automatic distribution when the QA guard is enabled. Legacy/unknown renders fail closed until they are re-rendered/rechecked.
+
+## Publishing safety
+
+- YouTube Shorts, TikTok and Instagram Reels queue.
+- Queue state persists across app restarts.
+- Exponential retry/backoff for safe failures.
+- Ambiguous submissions become `needs_review` instead of being blindly replayed.
+- Explicit duplicate-risk confirmation before retrying uncertain posts.
+- TikTok/Instagram remote IDs checkpointed before risky upload work continues.
+- TikTok byte-range upload retries for rate limits, retryable request states, 5xx and transport timeouts; permanent 4xx fails immediately.
+- A single quarantined/broken job cannot abort the rest of the due-post batch.
+- Submitted TikTok/Instagram posts are polled for platform-side completion/failure.
+- QA is enforced again immediately before the network publishing stage.
+
+## Creator consoles
+
+Main dashboard:
+
+`http://127.0.0.1:8787`
+
+Creator health / render-QA console:
+
+`http://127.0.0.1:8787/static/health.html`
+
+Analytics dashboard:
+
+`http://127.0.0.1:8787/static/analytics.html`
+
+The Health console surfaces RuneLite heartbeat, recording processing errors, social-account readiness, render-QA status and publishing jobs that need attention. Blocked renders can be sent through **Render All + QA** again instead of silently posting a bad video.
+
+## Distribution strategy
+
+Default model:
+
+**one strong original moment -> all selected platforms**
+
+The same approved moment can be posted to YouTube Shorts, TikTok and Instagram Reels on the same calendar date while each platform keeps independent performance analytics. Packaging can differ by platform without turning the product into three disconnected content calendars.
+
+A platform-aware duplicate guard prevents accidental repetitive posting without treating legitimate cross-posting of the same original creator content as a duplicate.
+
+## Audience learning
+
+- Local YouTube/TikTok/Instagram performance history in SQLite.
+- Platform-specific performance scoring.
+- Learning waits until posts have enough age/views by default.
+- Audience signals are bounded and do not replace creator Keep/Great/Reject feedback.
+- Future ranking can learn per-platform performance while the creator's explicit feedback remains higher authority.
+
+## Objective OSRS benchmark
+
+`app.benchmark` evaluates labeled OSRS moments using:
+
+- recall / weighted recall
+- precision
+- top-K hit rate
+- duplicate candidate rate
+- false-positive rate
+- boundary quality
+- event-type accuracy
+
+`app.benchmark_gate` then compares a candidate build against an accepted baseline and fails when metrics regress beyond bounded tolerances. See `benchmarks/README.md` for the golden-VOD workflow.
+
+Public Odablock, Westham, Dino, Torvesta, B0aty and competitive-event clips can be used as structural references for pacing/payoff research, but AutoClip does not redistribute their media as a benchmark/training dataset without permission.
 
 ## Install
 
@@ -40,101 +119,46 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\launch.ps1
 ```
 
-Main dashboard:
+Then open the main dashboard at `http://127.0.0.1:8787`.
 
-`http://127.0.0.1:8787`
+## RuneLite companion
 
-Analytics dashboard:
+The companion sends local OSRS events to the AutoClip API. By default it uses:
 
-`http://127.0.0.1:8787/static/analytics.html`
+`http://127.0.0.1:8787/api/game-events`
 
-## YouTube publishing and analytics
+The token must match `runelite_bridge_token` in `config.json`. Smart framing and lightweight local-state telemetry are configurable in the RuneLite plugin settings.
 
-Publishing still uses your local Google Desktop OAuth client at:
+Gameplay must never depend on AutoClip being open: network work runs away from the RuneLite client thread and bridge failures are ignored by the game client.
+
+## YouTube publishing / analytics
+
+Publishing uses a local Google Desktop OAuth client at:
 
 `secrets/youtube_client_secret.json`
 
-Connect normal YouTube publishing from the main dashboard. v0.8 uses a separate read-only analytics token so analytics permissions do not need to be mixed into the upload token.
-
-Run once:
+YouTube analytics uses the separate local read-only analytics flow:
 
 ```powershell
 .\connect_analytics.ps1
-```
-
-This requests read-only YouTube/YouTube Analytics permissions and stores the resulting local token under `secrets/`.
-
-To pull metrics immediately:
-
-```powershell
 .\refresh_analytics.ps1
 ```
 
-## TikTok analytics
+## TikTok
 
-The TikTok access token used for analytics needs the `video.list` scope in addition to the scopes required for publishing. Postal AutoClip queries owned videos for view, like, comment and share counts.
+TikTok publishing uses the Content Posting API. Creator-info/privacy capabilities are queried before upload. The access token used for owned-video analytics also needs the applicable `video.list` permission.
 
-For posts created through the Content Posting API, TikTok may initially give Postal AutoClip a `publish_id`. v0.8 reads the public post ID from TikTok's publish-status result when it is available. If no safely matchable public post ID exists, the collector records a note instead of guessing which TikTok belongs to the clip.
+Public Direct Post behavior must continue to follow TikTok's current audit/policy requirements; the release gate tracks the remaining production policy/consent UX.
 
-## Instagram analytics
+## Instagram
 
-Postal AutoClip reuses the Instagram credential setup from v0.7 (`secrets/instagram_token.json`). It reads Reel insights using the configured Graph API version. Because Meta changes which metrics are valid by media type/version, v0.8 requests metrics independently and keeps whatever the connected account currently supports.
-
-## Audience-learning guardrails
-
-Default settings:
-
-```json
-{
-  "analytics_enabled": true,
-  "analytics_refresh_hours": 6.0,
-  "analytics_history_days": 90,
-  "analytics_collection_min_age_hours": 6.0,
-  "analytics_learning_enabled": true,
-  "analytics_learning_weight": 0.35,
-  "analytics_learning_min_age_hours": 24.0,
-  "analytics_learning_min_views": 100
-}
-```
-
-A newly published clip can be measured after the collection minimum, but it does not train future ranking until it is at least 24 hours old and has at least 100 views by default. Audience learning is bounded so one viral outlier cannot completely override your explicit feedback.
-
-## Cross-platform distribution
-
-Recommended default workflow:
-
-1. Stream normally.
-2. Let AutoClip detect candidates.
-3. Mark the genuinely good moments Keep/Great.
-4. Render All and let it choose BEST.
-5. Preview the weekly plan.
-6. Cross-post the same approved moment to YouTube, TikTok and Instagram.
-7. Let each platform use native packaging/cover metadata.
-8. Let v0.8 collect results and gradually improve ranking.
-
-This means five strong weekly moments can become fifteen native distribution posts without requiring fifteen different videos.
-
-## Existing capabilities
-
-- Camera-free OSRS visual/audio/transcript detection.
-- Optional RuneLite exact-event bridge.
-- Rare-drop, PvP, raid, big-hit and reaction-oriented ranking.
-- Local Whisper transcription.
-- Optional local Ollama second pass.
-- Editable timing and hooks.
-- Animated captions and OSRS-aware reframing.
-- 22s / 38s / 58s variants and automatic BEST selection.
-- Automatic cover-frame extraction.
-- YouTube Shorts publishing.
-- TikTok Content Posting API support.
-- Instagram Reels resumable publishing.
-- Local scheduling and retry queue.
-- Weekly cross-platform distribution planner.
-- Platform-aware duplicate/repetition protection.
+Instagram Reels uses the local credential configuration in `secrets/instagram_token.json`, creates a resumable media container, uploads the render, polls container processing and publishes only after Meta reports it ready.
 
 ## Privacy
 
-Source VODs, transcripts, game events, clip feedback, renders, analytics history and OAuth/access tokens stay local by default. Credential files under `secrets/` are Git-ignored. Only media/metadata you explicitly queue is sent to the selected social platform.
+Source VODs, transcripts, RuneLite event history, creator feedback, render QA details, analytics history and OAuth/access tokens stay local by default. Credential files under `secrets/` are Git-ignored. Only media/metadata explicitly queued for a selected platform is sent to that platform.
+
+Do not commit private VODs/transcripts into the public benchmark repository. Commit small labels/metric results instead.
 
 ## Tests
 
@@ -143,4 +167,8 @@ Source VODs, transcripts, game events, clip feedback, renders, analytics history
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-GitHub Actions also runs install, Python compilation and pytest for pushes to `main`.
+GitHub Actions runs Python installation, compilation and the full pytest suite. A separate workflow builds/packages the RuneLite companion so RuneLite API breakage is caught before release.
+
+## Creator-ready release rule
+
+Do **not** call Postal AutoClip v1.0 creator-ready until issue #2's P0 gates are satisfied, the real labeled OSRS VOD benchmark is repeatable, platform failure injection is comprehensive, and a long real-world soak test completes without duplicate posts or silent failures.
