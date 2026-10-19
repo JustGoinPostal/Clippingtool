@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import ROOT, load_settings, save_settings
 from . import db
 from .watcher import scan_once, start_watcher
-from .pipeline import process_job, render_clip_id, render_all_variants
+from .pipeline import process_job, render_clip_id, render_all_variants, rerun_render_qa
 from .learning import learned_profile, audience_profile
 from .hooks import generate_hook
 from .covers import ensure_cover
@@ -147,6 +147,16 @@ def render_all(clip_id:int):
 @app.get("/api/clips/{clip_id}/renders")
 def renders(clip_id:int): return db.clip_renders(clip_id)
 
+@app.post("/api/renders/{render_id}/qa")
+def render_qa_recheck(render_id:int):
+    try:
+        result=rerun_render_qa(render_id)
+        return {"ok":True,**result}
+    except KeyError:
+        raise HTTPException(404,"Render not found")
+    except Exception as e:
+        raise HTTPException(500,f"Render QA failed: {type(e).__name__}: {e}")
+
 @app.post("/api/clips/{clip_id}/decision")
 def decision(clip_id:int,payload:dict=Body(...)):
     val=payload.get("status")
@@ -258,10 +268,14 @@ def publishing_queue_delete(job_id:int):
     db.exec_sql("DELETE FROM publish_queue WHERE id=?",(job_id,)); return {"ok":True}
 
 @app.post("/api/publishing/queue/{job_id}/retry")
-def publishing_queue_retry(job_id:int):
+def publishing_queue_retry(job_id:int,payload:dict=Body(default={})):
     row=db.q("SELECT * FROM publish_queue WHERE id=?",(job_id,),one=True)
     if not row: raise HTTPException(404,"Publish job not found")
-    db.update_publish_job(job_id,status="queued",scheduled_for=time.time(),error="")
+    if row["status"] in {"publishing","submitted","published"}:
+        raise HTTPException(400,"Active/published jobs cannot be retried")
+    if row["status"]=="needs_review" and not bool(payload.get("confirm_duplicate_risk",False)):
+        raise HTTPException(409,"This upload ended in an uncertain state. Confirm duplicate risk before retrying.")
+    db.update_publish_job(job_id,status="queued",scheduled_for=time.time(),next_attempt_at=0,error="")
     threading.Thread(target=process_due_posts,daemon=True).start(); return {"ok":True}
 
 @app.post("/api/publishing/run-due")

@@ -1,0 +1,43 @@
+name: Windows Postal AutoClip Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  POSTAL_AUTOCLIP_HOME: ${{ github.workspace }}/.test-home
+
+jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install FFmpeg
+        shell: powershell
+        run: |
+          choco install ffmpeg -y --no-progress
+          $ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
+          $ffprobe = (Get-Command ffprobe -ErrorAction Stop).Source
+          Write-Host "ffmpeg=$ffmpeg"
+          Write-Host "ffprobe=$ffprobe"
+          ffmpeg -version
+          ffprobe -version
+      - name: Install
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Compile
+        shell: powershell
+        run: python -m compileall -q app
+      - name: Test
+        shell: powershell
+        run: python -m pytest -q

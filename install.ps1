@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-Write-Host "== Postal AutoClip installer ==" -ForegroundColor Cyan
+Write-Host "== Postal AutoClip developer installer ==" -ForegroundColor Cyan
 $py = $null
 foreach ($cmd in @('py -3.12','py -3.11')) {
   try { Invoke-Expression "$cmd --version" | Out-Null; $py=$cmd; break } catch {}
@@ -13,5 +13,6 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
 Invoke-Expression "$py -m venv .venv"
 & .\.venv\Scripts\python.exe -m pip install --upgrade pip wheel
 & .\.venv\Scripts\python.exe -m pip install -e .
-if (-not (Test-Path config.json)) { Copy-Item config.example.json config.json }
-Write-Host "Installed. Run .\launch.ps1" -ForegroundColor Green
+Write-Host "Installed developer build." -ForegroundColor Green
+Write-Host "Persistent creator data will be stored under %LOCALAPPDATA%\PostalAutoClip." -ForegroundColor DarkGray
+Write-Host "Run .\launch.ps1"

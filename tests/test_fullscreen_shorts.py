@@ -5,12 +5,13 @@ from app import render_fullscreen
 def test_fullscreen_gameplay_uses_entire_vertical_frame_without_webcam(monkeypatch):
     s = Settings(layout="osrs_focus", webcam_manual_enabled=False, webcam_region="auto")
     monkeypatch.setattr(render_fullscreen, "_webcam_crop", lambda *args, **kwargs: None)
-    graph, region, mode, focus_points = render_fullscreen._full_game_filter(
+    graph, region, mode, focus_points, webcam_box = render_fullscreen._full_game_filter(
         None, 0.0, {"event_type": "combat", "features_json": "{}"}, "C\\:/tmp/captions.ass", s, 22.0
     )
     assert mode == "gameplay_fullscreen"
     assert region == ""
     assert focus_points == 0
+    assert webcam_box is None
     assert "scale=1080:1920" in graph
     assert "gblur" not in graph
     assert "overlay=" not in graph
@@ -25,7 +26,7 @@ def test_auto_uses_calibrated_postal_webcam_not_detector(monkeypatch):
         "_webcam_crop",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("heuristic webcam detector must not run")),
     )
-    graph, region, mode, focus_points = render_fullscreen._full_game_filter(
+    graph, region, mode, focus_points, webcam_box = render_fullscreen._full_game_filter(
         None, 0.0, {"event_type": "combat", "features_json": "{}"}, "C\\:/tmp/captions.ass", s, 22.0
     )
     assert mode == "gameplay_fullscreen"
@@ -36,6 +37,7 @@ def test_auto_uses_calibrated_postal_webcam_not_detector(monkeypatch):
     assert "overlay=345:54" in graph
     # The real camera is ~1.46:1, not 16:9. A 390px overlay should be ~267px tall.
     assert "scale=390:267" in graph
+    assert webcam_box == {"x":345,"y":54,"w":390,"h":267,"border":5}
 
 
 def test_manual_webcam_crop_scales_with_source_resolution(monkeypatch):
@@ -53,7 +55,7 @@ def test_explicit_webcam_region_puts_camera_top_center(monkeypatch):
     s = Settings(layout="osrs_focus", webcam_region="top_right")
     monkeypatch.setattr(render_fullscreen, "_webcam_crop", lambda *args, **kwargs: ("top_right", "crop=320:180:900:20"))
     monkeypatch.setattr(render_fullscreen, "_reaction_only_source", lambda *args, **kwargs: False)
-    graph, region, mode, focus_points = render_fullscreen._full_game_filter(
+    graph, region, mode, focus_points, webcam_box = render_fullscreen._full_game_filter(
         None, 0.0, {"event_type": "combat", "features_json": "{}"}, "C\\:/tmp/captions.ass", s, 22.0
     )
     assert mode == "gameplay_fullscreen"
@@ -62,6 +64,7 @@ def test_explicit_webcam_region_puts_camera_top_center(monkeypatch):
     assert "scale=1080:1920" in graph
     assert "overlay=345:54" in graph
     assert "gblur" not in graph
+    assert webcam_box == {"x":345,"y":54,"w":390,"h":219,"border":5}
 
 
 def test_runelite_focus_points_drive_crop_expression(monkeypatch):
@@ -70,12 +73,13 @@ def test_runelite_focus_points_drive_crop_expression(monkeypatch):
         {"time":2.0,"event_type":"bridge_focus","payload":{"focus_x_ratio":0.30,"focus_y_ratio":0.50}},
         {"time":8.0,"event_type":"big_hit","payload":{"focus_x_ratio":0.72,"focus_y_ratio":0.48}},
     ]
-    graph, region, mode, focus_points = render_fullscreen._full_game_filter(
+    graph, region, mode, focus_points, webcam_box = render_fullscreen._full_game_filter(
         None,0.0,{"event_type":"big_hit","features_json":"{}"},"C\\:/tmp/captions.ass",s,12.0,game_events=events
     )
     assert region == ""
     assert mode == "gameplay_fullscreen"
     assert focus_points == 2
+    assert webcam_box is None
     assert "iw*(" in graph
     assert "0.300000" in graph
     assert "0.720000" in graph

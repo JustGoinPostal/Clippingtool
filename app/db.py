@@ -2,7 +2,7 @@ from __future__ import annotations
 import sqlite3, json, threading
 from pathlib import Path
 from typing import Any
-from .config import ROOT
+from .config import ROOT, load_settings
 
 DB_PATH = ROOT / "data" / "postal_autoclip.db"
 _lock = threading.Lock()
@@ -15,94 +15,54 @@ def _con():
 
 def _ensure_column(c, table: str, col: str, ddl: str):
     names={r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
-    if col not in names:
-        c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+    if col not in names: c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
 def init_db():
     with _lock, _con() as c:
         c.executescript("""
         CREATE TABLE IF NOT EXISTS jobs (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          source_path TEXT UNIQUE NOT NULL,
-          status TEXT NOT NULL DEFAULT 'queued',
-          progress REAL NOT NULL DEFAULT 0,
-          message TEXT NOT NULL DEFAULT '',
-          duration REAL NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          id INTEGER PRIMARY KEY AUTOINCREMENT, source_path TEXT UNIQUE NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued', progress REAL NOT NULL DEFAULT 0,
+          message TEXT NOT NULL DEFAULT '', duration REAL NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS clips (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          job_id INTEGER NOT NULL,
-          start REAL NOT NULL,
-          end REAL NOT NULL,
-          score REAL NOT NULL,
-          reason TEXT NOT NULL DEFAULT '',
-          transcript TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL DEFAULT 'candidate',
-          output_path TEXT NOT NULL DEFAULT '',
-          title TEXT NOT NULL DEFAULT '',
-          description TEXT NOT NULL DEFAULT '',
-          hashtags TEXT NOT NULL DEFAULT '',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL, start REAL NOT NULL, end REAL NOT NULL,
+          score REAL NOT NULL, reason TEXT NOT NULL DEFAULT '', transcript TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'candidate', output_path TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '', hashtags TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY(job_id) REFERENCES jobs(id)
         );
         CREATE INDEX IF NOT EXISTS idx_clips_job ON clips(job_id);
         CREATE TABLE IF NOT EXISTS feedback (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          clip_id INTEGER UNIQUE NOT NULL,
-          status TEXT NOT NULL,
-          features_json TEXT NOT NULL DEFAULT '{}',
-          event_type TEXT NOT NULL DEFAULT 'speech',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          id INTEGER PRIMARY KEY AUTOINCREMENT, clip_id INTEGER UNIQUE NOT NULL, status TEXT NOT NULL,
+          features_json TEXT NOT NULL DEFAULT '{}', event_type TEXT NOT NULL DEFAULT 'speech',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS game_events (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          event_time REAL NOT NULL,
-          event_type TEXT NOT NULL,
-          confidence REAL NOT NULL DEFAULT 1.0,
-          payload_json TEXT NOT NULL DEFAULT '{}',
-          source TEXT NOT NULL DEFAULT 'runelite',
+          id INTEGER PRIMARY KEY AUTOINCREMENT, event_time REAL NOT NULL, event_type TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 1.0, payload_json TEXT NOT NULL DEFAULT '{}', source TEXT NOT NULL DEFAULT 'runelite',
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_game_events_time ON game_events(event_time);
         CREATE TABLE IF NOT EXISTS renders (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          clip_id INTEGER NOT NULL,
-          variant TEXT NOT NULL,
-          output_path TEXT NOT NULL,
-          render_start REAL NOT NULL DEFAULT 0,
-          render_end REAL NOT NULL DEFAULT 0,
-          focus_mode TEXT NOT NULL DEFAULT 'center',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          UNIQUE(clip_id,variant),
-          FOREIGN KEY(clip_id) REFERENCES clips(id)
+          id INTEGER PRIMARY KEY AUTOINCREMENT, clip_id INTEGER NOT NULL, variant TEXT NOT NULL, output_path TEXT NOT NULL,
+          render_start REAL NOT NULL DEFAULT 0, render_end REAL NOT NULL DEFAULT 0, focus_mode TEXT NOT NULL DEFAULT 'center',
+          quality_score REAL NOT NULL DEFAULT 0, quality_json TEXT NOT NULL DEFAULT '{}',
+          qa_status TEXT NOT NULL DEFAULT 'unknown', qa_json TEXT NOT NULL DEFAULT '{}', is_best INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(clip_id,variant), FOREIGN KEY(clip_id) REFERENCES clips(id)
         );
         CREATE INDEX IF NOT EXISTS idx_renders_clip ON renders(clip_id);
         CREATE TABLE IF NOT EXISTS publish_queue (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          clip_id INTEGER NOT NULL,
-          render_id INTEGER NOT NULL,
-          platform TEXT NOT NULL,
-          scheduled_for REAL NOT NULL,
-          status TEXT NOT NULL DEFAULT 'queued',
-          title TEXT NOT NULL DEFAULT '',
-          caption TEXT NOT NULL DEFAULT '',
-          hashtags TEXT NOT NULL DEFAULT '',
-          privacy TEXT NOT NULL DEFAULT 'private',
-          options_json TEXT NOT NULL DEFAULT '{}',
-          attempts INTEGER NOT NULL DEFAULT 0,
-          error TEXT NOT NULL DEFAULT '',
-          platform_post_id TEXT NOT NULL DEFAULT '',
-          platform_url TEXT NOT NULL DEFAULT '',
-          result_json TEXT NOT NULL DEFAULT '{}',
-          published_at REAL NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(clip_id) REFERENCES clips(id),
-          FOREIGN KEY(render_id) REFERENCES renders(id)
+          id INTEGER PRIMARY KEY AUTOINCREMENT, clip_id INTEGER NOT NULL, render_id INTEGER NOT NULL, platform TEXT NOT NULL,
+          scheduled_for REAL NOT NULL, status TEXT NOT NULL DEFAULT 'queued', title TEXT NOT NULL DEFAULT '',
+          caption TEXT NOT NULL DEFAULT '', hashtags TEXT NOT NULL DEFAULT '', privacy TEXT NOT NULL DEFAULT 'private',
+          options_json TEXT NOT NULL DEFAULT '{}', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+          platform_post_id TEXT NOT NULL DEFAULT '', platform_url TEXT NOT NULL DEFAULT '', result_json TEXT NOT NULL DEFAULT '{}',
+          published_at REAL NOT NULL DEFAULT 0, next_attempt_at REAL NOT NULL DEFAULT 0, last_attempt_at REAL NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(clip_id) REFERENCES clips(id), FOREIGN KEY(render_id) REFERENCES renders(id)
         );
         CREATE INDEX IF NOT EXISTS idx_publish_due ON publish_queue(status,scheduled_for);
         """)
@@ -112,14 +72,23 @@ def init_db():
         _ensure_column(c,"clips","personal_score","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"clips","hook_text","TEXT NOT NULL DEFAULT ''")
         _ensure_column(c,"clips","best_variant","TEXT NOT NULL DEFAULT ''")
+        _ensure_column(c,"clips","story_archetype","TEXT NOT NULL DEFAULT ''")
+        _ensure_column(c,"clips","event_context_json","TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(c,"renders","quality_score","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"renders","quality_json","TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(c,"renders","qa_status","TEXT NOT NULL DEFAULT 'unknown'")
+        _ensure_column(c,"renders","qa_json","TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(c,"renders","is_best","INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(c,"publish_queue","next_attempt_at","REAL NOT NULL DEFAULT 0")
+        _ensure_column(c,"publish_queue","last_attempt_at","REAL NOT NULL DEFAULT 0")
+        # Migration-sensitive indexes must be created only after legacy tables
+        # have received the columns referenced by those indexes.
+        c.execute("CREATE INDEX IF NOT EXISTS idx_publish_retry ON publish_queue(status,next_attempt_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_renders_qa ON renders(clip_id,qa_status,quality_score)")
         c.commit()
 
 def q(sql: str, args=(), one=False):
-    with _lock, _con() as c:
-        rows = c.execute(sql, args).fetchall()
+    with _lock, _con() as c: rows = c.execute(sql, args).fetchall()
     vals=[dict(r) for r in rows]
     return vals[0] if one and vals else (None if one else vals)
 
@@ -128,21 +97,17 @@ def exec_sql(sql: str, args=()):
         cur=c.execute(sql,args); c.commit(); return cur.lastrowid
 
 def add_job(path: str) -> int:
-    try:
-        return exec_sql("INSERT INTO jobs(source_path) VALUES(?)",(path,))
+    try: return exec_sql("INSERT INTO jobs(source_path) VALUES(?)",(path,))
     except sqlite3.IntegrityError:
-        row=q("SELECT id FROM jobs WHERE source_path=?",(path,),one=True)
-        return int(row["id"])
+        row=q("SELECT id FROM jobs WHERE source_path=?",(path,),one=True); return int(row["id"])
 
 def update_job(job_id: int, **fields):
     if not fields: return
-    fields["updated_at"]="CURRENT_TIMESTAMP"
-    sets=[]; vals=[]
+    fields["updated_at"]="CURRENT_TIMESTAMP"; sets=[]; vals=[]
     for k,v in fields.items():
         if k=="updated_at": sets.append("updated_at=CURRENT_TIMESTAMP")
         else: sets.append(f"{k}=?"); vals.append(v)
-    vals.append(job_id)
-    exec_sql(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?",vals)
+    vals.append(job_id); exec_sql(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?",vals)
 
 def replace_clips(job_id: int, clips: list[dict[str, Any]]):
     with _lock, _con() as c:
@@ -153,85 +118,94 @@ def replace_clips(job_id: int, clips: list[dict[str, Any]]):
         c.execute("DELETE FROM clips WHERE job_id=?",(job_id,))
         for x in clips:
             c.execute("""INSERT INTO clips(job_id,start,end,score,reason,transcript,title,description,hashtags,
-              event_type,features_json,base_score,personal_score,hook_text,best_variant)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
-              job_id,x["start"],x["end"],x["score"],x.get("reason",""),x.get("transcript",""),
-              x.get("title",""),x.get("description",""),x.get("hashtags",""),x.get("event_type","speech"),
-              json.dumps(x.get("features",{}),separators=(",",":")),
-              x.get("base_score",x["score"]),x.get("personal_score",0),x.get("hook_text",""),""))
+              event_type,features_json,base_score,personal_score,hook_text,story_archetype,event_context_json,best_variant)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
+              job_id,x["start"],x["end"],x["score"],x.get("reason",""),x.get("transcript",""),x.get("title",""),
+              x.get("description",""),x.get("hashtags",""),x.get("event_type","speech"),
+              json.dumps(x.get("features",{}),separators=(",",":")),x.get("base_score",x["score"]),x.get("personal_score",0),
+              x.get("hook_text",""),x.get("story_archetype",""),json.dumps(x.get("event_context",{}),separators=(",",":")),""))
         c.commit()
 
-def add_game_event(event_time: float, event_type: str, confidence: float=1.0,
-                   payload: dict|None=None, source: str="runelite") -> int:
-    return exec_sql(
-        "INSERT INTO game_events(event_time,event_type,confidence,payload_json,source) VALUES(?,?,?,?,?)",
-        (float(event_time),str(event_type),float(confidence),
-         json.dumps(payload or {},separators=(",",":")),str(source))
-    )
+def add_game_event(event_time: float, event_type: str, confidence: float=1.0, payload: dict|None=None, source: str="runelite") -> int:
+    return exec_sql("INSERT INTO game_events(event_time,event_type,confidence,payload_json,source) VALUES(?,?,?,?,?)",
+        (float(event_time),str(event_type),float(confidence),json.dumps(payload or {},separators=(",",":")),str(source)))
 
 def game_events_between(start_epoch: float, end_epoch: float) -> list[dict[str, Any]]:
-    rows=q("SELECT * FROM game_events WHERE event_time BETWEEN ? AND ? ORDER BY event_time",
-           (float(start_epoch),float(end_epoch)))
+    rows=q("SELECT * FROM game_events WHERE event_time BETWEEN ? AND ? ORDER BY event_time",(float(start_epoch),float(end_epoch)))
     for r in rows:
         try: r["payload"]=json.loads(r.pop("payload_json") or "{}")
         except Exception: r["payload"]={}
     return rows
 
-def upsert_render(clip_id: int, variant: str, output_path: str,
-                  render_start: float, render_end: float, focus_mode: str,
-                  quality_score: float=0.0, quality: dict|None=None):
-    exec_sql("""INSERT INTO renders(clip_id,variant,output_path,render_start,render_end,focus_mode,
-                quality_score,quality_json,is_best,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP)
-                ON CONFLICT(clip_id,variant) DO UPDATE SET
-                output_path=excluded.output_path,render_start=excluded.render_start,
-                render_end=excluded.render_end,focus_mode=excluded.focus_mode,
-                quality_score=excluded.quality_score,quality_json=excluded.quality_json,
-                is_best=0,updated_at=CURRENT_TIMESTAMP""",
-             (clip_id,variant,output_path,float(render_start),float(render_end),focus_mode,
-              float(quality_score),json.dumps(quality or {},separators=(",",":"))))
+def upsert_render(clip_id: int, variant: str, output_path: str, render_start: float, render_end: float, focus_mode: str,
+                  quality_score: float=0.0, quality: dict|None=None, qa_status: str="unknown", qa: dict|None=None):
+    exec_sql("""INSERT INTO renders(clip_id,variant,output_path,render_start,render_end,focus_mode,quality_score,quality_json,
+                qa_status,qa_json,is_best,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP)
+                ON CONFLICT(clip_id,variant) DO UPDATE SET output_path=excluded.output_path,render_start=excluded.render_start,
+                render_end=excluded.render_end,focus_mode=excluded.focus_mode,quality_score=excluded.quality_score,
+                quality_json=excluded.quality_json,qa_status=excluded.qa_status,qa_json=excluded.qa_json,is_best=0,updated_at=CURRENT_TIMESTAMP""",
+             (clip_id,variant,output_path,float(render_start),float(render_end),focus_mode,float(quality_score),
+              json.dumps(quality or {},separators=(",",":")),str(qa_status or "unknown"),json.dumps(qa or {},separators=(",",":"))))
+
+def update_render_qa(render_id: int, status: str, qa: dict|None=None):
+    exec_sql("UPDATE renders SET qa_status=?,qa_json=?,is_best=0,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+             (str(status or "unknown"),json.dumps(qa or {},separators=(",",":")),int(render_id)))
 
 def choose_best_render(clip_id: int):
-    rows=q("SELECT * FROM renders WHERE clip_id=? ORDER BY quality_score DESC,id ASC",(clip_id,))
-    if not rows:
-        exec_sql("UPDATE clips SET best_variant='' WHERE id=?",(clip_id,))
+    rows=q("SELECT * FROM renders WHERE clip_id=? ORDER BY CASE WHEN qa_status='pass' THEN 0 ELSE 1 END,quality_score DESC,id ASC",(clip_id,))
+    safe=[r for r in rows if str(r.get("qa_status") or "") == "pass"]
+    if not safe:
+        with _lock, _con() as c:
+            c.execute("UPDATE renders SET is_best=0 WHERE clip_id=?",(clip_id,)); c.execute("UPDATE clips SET best_variant='',output_path='' WHERE id=?",(clip_id,)); c.commit()
         return None
-    best=rows[0]
+    best=safe[0]
     with _lock, _con() as c:
-        c.execute("UPDATE renders SET is_best=0 WHERE clip_id=?",(clip_id,))
-        c.execute("UPDATE renders SET is_best=1 WHERE id=?",(best["id"],))
-        c.execute("UPDATE clips SET best_variant=?,output_path=? WHERE id=?",
-                  (best["variant"],best["output_path"],clip_id))
-        c.commit()
-    best["is_best"]=1
-    return best
+        c.execute("UPDATE renders SET is_best=0 WHERE clip_id=?",(clip_id,)); c.execute("UPDATE renders SET is_best=1 WHERE id=?",(best["id"],))
+        c.execute("UPDATE clips SET best_variant=?,output_path=? WHERE id=?",(best["variant"],best["output_path"],clip_id)); c.commit()
+    best["is_best"]=1; return best
 
 def clip_renders(clip_id: int):
-    return q("SELECT * FROM renders WHERE clip_id=? ORDER BY is_best DESC,quality_score DESC,id",(clip_id,))
+    return q("SELECT * FROM renders WHERE clip_id=? ORDER BY is_best DESC,CASE WHEN qa_status='pass' THEN 0 ELSE 1 END,quality_score DESC,id",(clip_id,))
 
-def add_publish_job(clip_id: int, render_id: int, platform: str, scheduled_for: float,
-                    title: str="", caption: str="", hashtags: str="", privacy: str="private",
-                    options: dict|None=None) -> int:
-    return exec_sql("""INSERT INTO publish_queue(clip_id,render_id,platform,scheduled_for,title,caption,hashtags,privacy,options_json)
-                       VALUES(?,?,?,?,?,?,?,?,?)""",
-                    (int(clip_id),int(render_id),str(platform),float(scheduled_for),str(title),str(caption),
-                     str(hashtags),str(privacy),json.dumps(options or {},separators=(",",":"))))
+def _qa_blocks_publish(render_id: int) -> tuple[bool,str]:
+    s=load_settings()
+    if not bool(s.render_qa_enabled and s.render_qa_block_publish): return False,""
+    render=q("SELECT id,qa_status,qa_json FROM renders WHERE id=?",(int(render_id),),one=True)
+    if not render: return True,"Render no longer exists."
+    status=str(render.get("qa_status") or "unknown")
+    if status=="pass": return False,""
+    reason=f"Render QA is {status.upper()}; re-run QA or render a safe variant before publishing."
+    try:
+        qa=json.loads(render.get("qa_json") or "{}")
+        blockers=qa.get("blockers") if isinstance(qa,dict) else None
+        if blockers: reason += " " + str(blockers[0])
+    except Exception: pass
+    return True,reason
+
+def add_publish_job(clip_id: int, render_id: int, platform: str, scheduled_for: float, title: str="", caption: str="",
+                    hashtags: str="", privacy: str="private", options: dict|None=None) -> int:
+    blocked,reason=_qa_blocks_publish(render_id)
+    if blocked: raise RuntimeError(reason)
+    return exec_sql("INSERT INTO publish_queue(clip_id,render_id,platform,scheduled_for,title,caption,hashtags,privacy,options_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (int(clip_id),int(render_id),str(platform),float(scheduled_for),str(title),str(caption),str(hashtags),str(privacy),json.dumps(options or {},separators=(",",":"))))
 
 def update_publish_job(job_id: int, **fields):
-    allowed={"scheduled_for","status","title","caption","hashtags","privacy","options_json","attempts","error",
-             "platform_post_id","platform_url","result_json","published_at"}
+    allowed={"scheduled_for","status","title","caption","hashtags","privacy","options_json","attempts","error","platform_post_id","platform_url","result_json","published_at","next_attempt_at","last_attempt_at"}
+    if fields.get("status")=="publishing":
+        row=q("SELECT render_id FROM publish_queue WHERE id=?",(int(job_id),),one=True)
+        blocked,reason=_qa_blocks_publish(int(row["render_id"]) if row else 0)
+        if blocked:
+            exec_sql("UPDATE publish_queue SET status='needs_review',next_attempt_at=0,error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(reason,int(job_id)))
+            raise RuntimeError(reason)
     sets=[]; vals=[]
     for key,value in fields.items():
         if key not in allowed: continue
         sets.append(f"{key}=?"); vals.append(value)
     if not sets: return
-    sets.append("updated_at=CURRENT_TIMESTAMP")
-    vals.append(int(job_id))
-    exec_sql(f"UPDATE publish_queue SET {', '.join(sets)} WHERE id=?",vals)
+    sets.append("updated_at=CURRENT_TIMESTAMP"); vals.append(int(job_id)); exec_sql(f"UPDATE publish_queue SET {', '.join(sets)} WHERE id=?",vals)
 
 def publish_jobs(limit: int=100):
-    return q("""SELECT publish_queue.*,renders.variant,renders.quality_score,renders.is_best,renders.output_path,
+    return q("""SELECT publish_queue.*,renders.variant,renders.quality_score,renders.qa_status,renders.qa_json,renders.is_best,renders.output_path,
                 clips.title AS clip_title,clips.description AS clip_description,clips.hashtags AS clip_hashtags
-                FROM publish_queue JOIN renders ON renders.id=publish_queue.render_id
-                JOIN clips ON clips.id=publish_queue.clip_id
+                FROM publish_queue JOIN renders ON renders.id=publish_queue.render_id JOIN clips ON clips.id=publish_queue.clip_id
                 ORDER BY scheduled_for DESC,id DESC LIMIT ?""",(max(1,min(500,int(limit))),))

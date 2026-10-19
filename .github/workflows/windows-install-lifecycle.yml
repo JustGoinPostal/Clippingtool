@@ -1,0 +1,204 @@
+name: Windows Installer Lifecycle
+
+on:
+  pull_request:
+    paths:
+      - 'app/paths.py'
+      - 'app/config.py'
+      - 'app/desktop.py'
+      - 'app/secure_store.py'
+      - 'app/updater.py'
+      - 'app/updater_runner.py'
+      - 'desktop_entry.py'
+      - 'updater_entry.py'
+      - 'build_windows_beta.ps1'
+      - 'scripts/sign_windows.ps1'
+      - 'scripts/inno_sign_file.ps1'
+      - 'installer/**'
+      - 'pyproject.toml'
+      - '.github/workflows/windows-install-lifecycle.yml'
+      - '.github/workflows/windows-installer.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '11'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Install packaging tools
+        shell: powershell
+        run: choco install ffmpeg innosetup -y --no-progress
+
+      - name: Configure trusted disposable signing certificate
+        shell: powershell
+        run: |
+          $subject = 'CN=Postal AutoClip CI Lifecycle'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $subject -CertStoreLocation 'Cert:\CurrentUser\My' -KeyExportPolicy Exportable -KeyLength 2048 -HashAlgorithm SHA256
+          $passwordText = 'PostalAutoClip-CI-Lifecycle'
+          $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
+          $pfx = Join-Path $env:RUNNER_TEMP 'postal-autoclip-lifecycle.pfx'
+          $cer = Join-Path $env:RUNNER_TEMP 'postal-autoclip-lifecycle.cer'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $password | Out-Null
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          & certutil.exe -user -addstore -f Root $cer | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "certutil Root import failed with exit code $LASTEXITCODE" }
+          & certutil.exe -user -addstore -f TrustedPublisher $cer | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "certutil TrustedPublisher import failed with exit code $LASTEXITCODE" }
+          "POSTAL_CODESIGN_PFX=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_CODESIGN_PASSWORD=$passwordText" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_CODESIGN_SKIP_TIMESTAMP=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "POSTAL_REQUIRE_SIGNING=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build RuneLite companion
+        shell: powershell
+        run: gradle -p runelite-companion clean testClasses shadowJar --no-daemon
+
+      - name: Build base installer
+        shell: powershell
+        run: |
+          .\build_windows_beta.ps1 -Version '0.9.0rc1' -ReleaseTag 'ci-lifecycle-base'
+          Copy-Item 'installer/output/PostalAutoClip-Beta-Setup.exe' "$env:RUNNER_TEMP\PostalAutoClip-base.exe"
+
+      - name: Install base and create persistent creator marker
+        shell: powershell
+        run: |
+          $installer = "$env:RUNNER_TEMP\PostalAutoClip-base.exe"
+          $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Base installer failed with Inno Setup exit code $($proc.ExitCode)" }
+          $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
+          $exe = "$program\PostalAutoClip.exe"
+          if (-not (Test-Path $exe)) { throw 'Installed PostalAutoClip.exe is missing.' }
+          $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw "Installed base self-test failed: $($test.ExitCode)" }
+          $uninstaller = Get-ChildItem $program -Filter 'unins*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Signed Inno uninstaller was not found after install.' }
+          $uninstallSig = Get-AuthenticodeSignature -LiteralPath $uninstaller.FullName
+          if ($uninstallSig.Status -ne 'Valid') { throw "Installed uninstaller is not Authenticode-valid: $($uninstallSig.Status)" }
+          $home = "$env:LOCALAPPDATA\PostalAutoClip"
+          New-Item -ItemType Directory -Force $home | Out-Null
+          'creator-data-must-survive' | Set-Content "$home\lifecycle-marker.txt" -Encoding UTF8
+
+      - name: Build valid update installer
+        shell: powershell
+        run: |
+          .\build_windows_beta.ps1 -Version '0.9.0rc2' -ReleaseTag 'ci-lifecycle-update'
+          Copy-Item 'installer/output/PostalAutoClip-Beta-Setup.exe' "$env:RUNNER_TEMP\PostalAutoClip-update.exe"
+          Copy-Item 'installer/output/postal-autoclip-update.json' "$env:RUNNER_TEMP\PostalAutoClip-update.json"
+
+      - name: Apply update through the real external updater
+        shell: powershell
+        run: |
+          $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
+          $installer = "$env:RUNNER_TEMP\PostalAutoClip-update.exe"
+          $manifest = Get-Content "$env:RUNNER_TEMP\PostalAutoClip-update.json" -Raw | ConvertFrom-Json
+          $runner = "$env:RUNNER_TEMP\PostalAutoClipUpdater-valid.exe"
+          Copy-Item "$program\PostalAutoClipUpdater.exe" $runner -Force
+          $args = @(
+            '--apply', ('"{0}"' -f $installer),
+            '--program-dir', ('"{0}"' -f $program),
+            '--app-exe', 'PostalAutoClip.exe',
+            '--parent-pid', '0',
+            '--old-version', '0.9.0rc1',
+            '--new-version', '0.9.0rc2',
+            '--sha256', $manifest.sha256,
+            '--signer-subject', ('"{0}"' -f $manifest.signer_subject),
+            '--signer-thumbprint', $manifest.signer_thumbprint,
+            '--no-relaunch'
+          )
+          $proc = Start-Process -FilePath $runner -ArgumentList $args -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Real updater rejected the valid rc2 update: $($proc.ExitCode)" }
+          $exe = "$program\PostalAutoClip.exe"
+          $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw "Updated rc2 build self-test failed: $($test.ExitCode)" }
+          $info = Get-Content "$program\BUILD_INFO.txt" -Raw
+          if ($info -notmatch 'Version:\s*0\.9\.0rc2') { throw "Expected rc2 after updater, got: $info" }
+          $status = Get-Content "$env:LOCALAPPDATA\PostalAutoClip\updates\updater-last.json" -Raw | ConvertFrom-Json
+          if ($status.status -ne 'updated') { throw "Updater did not record updated state: $($status.status)" }
+          $marker = "$env:LOCALAPPDATA\PostalAutoClip\lifecycle-marker.txt"
+          if ((Get-Content $marker -Raw).Trim() -ne 'creator-data-must-survive') { throw 'Creator AppData marker did not survive automatic update.' }
+
+      - name: Build deliberately broken but validly signed update
+        shell: powershell
+        run: |
+          .\build_windows_beta.ps1 -Version '0.9.0rc3-broken' -ReleaseTag 'ci-lifecycle-broken' -BreakInstalledSelfTest
+          Copy-Item 'installer/output/PostalAutoClip-Beta-Setup.exe' "$env:RUNNER_TEMP\PostalAutoClip-broken.exe"
+          Copy-Item 'installer/output/postal-autoclip-update.json' "$env:RUNNER_TEMP\PostalAutoClip-broken.json"
+
+      - name: Prove failed health check automatically rolls back
+        shell: powershell
+        run: |
+          $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
+          $installer = "$env:RUNNER_TEMP\PostalAutoClip-broken.exe"
+          $manifest = Get-Content "$env:RUNNER_TEMP\PostalAutoClip-broken.json" -Raw | ConvertFrom-Json
+          $runner = "$env:RUNNER_TEMP\PostalAutoClipUpdater-rollback.exe"
+          Copy-Item "$program\PostalAutoClipUpdater.exe" $runner -Force
+          $args = @(
+            '--apply', ('"{0}"' -f $installer),
+            '--program-dir', ('"{0}"' -f $program),
+            '--app-exe', 'PostalAutoClip.exe',
+            '--parent-pid', '0',
+            '--old-version', '0.9.0rc2',
+            '--new-version', '0.9.0rc3-broken',
+            '--sha256', $manifest.sha256,
+            '--signer-subject', ('"{0}"' -f $manifest.signer_subject),
+            '--signer-thumbprint', $manifest.signer_thumbprint,
+            '--no-relaunch'
+          )
+          $proc = Start-Process -FilePath $runner -ArgumentList $args -Wait -PassThru
+          if ($proc.ExitCode -eq 0) { throw 'Deliberately broken update unexpectedly committed instead of rolling back.' }
+          $status = Get-Content "$env:LOCALAPPDATA\PostalAutoClip\updates\updater-last.json" -Raw | ConvertFrom-Json
+          if ($status.status -ne 'rolled_back') { throw "Broken update did not complete rollback: $($status.status) :: $($status.error) :: $($status.rollback_error)" }
+          $exe = "$program\PostalAutoClip.exe"
+          $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw "Restored rc2 build failed self-test: $($test.ExitCode)" }
+          $info = Get-Content "$program\BUILD_INFO.txt" -Raw
+          if ($info -notmatch 'Version:\s*0\.9\.0rc2') { throw "Rollback did not restore rc2: $info" }
+          $uninstaller = Get-ChildItem $program -Filter 'unins*.exe' | Select-Object -First 1
+          $uninstallSig = Get-AuthenticodeSignature -LiteralPath $uninstaller.FullName
+          if ($uninstallSig.Status -ne 'Valid') { throw "Rolled-back uninstaller is not Authenticode-valid: $($uninstallSig.Status)" }
+          $marker = "$env:LOCALAPPDATA\PostalAutoClip\lifecycle-marker.txt"
+          if ((Get-Content $marker -Raw).Trim() -ne 'creator-data-must-survive') { throw 'Creator AppData marker did not survive rollback.' }
+
+      - name: Uninstall and prove AppData survives
+        shell: powershell
+        run: |
+          $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
+          $uninstaller = Get-ChildItem $program -Filter 'unins*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Inno Setup uninstaller was not found.' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $uninstaller.FullName
+          if ($signature.Status -ne 'Valid') { throw "Refusing to run unsigned/invalid uninstaller in lifecycle gate: $($signature.Status)" }
+          $proc = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Uninstall failed: $($proc.ExitCode)" }
+          if (Test-Path "$program\PostalAutoClip.exe") { throw 'Program executable remains after uninstall.' }
+          $marker = "$env:LOCALAPPDATA\PostalAutoClip\lifecycle-marker.txt"
+          if ((Get-Content $marker -Raw).Trim() -ne 'creator-data-must-survive') { throw 'Creator AppData was removed by uninstall.' }
+
+      - name: Reinstall valid update and prove creator data survives again
+        shell: powershell
+        run: |
+          $installer = "$env:RUNNER_TEMP\PostalAutoClip-update.exe"
+          $proc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Reinstall failed with Inno Setup exit code $($proc.ExitCode)" }
+          $program = "$env:LOCALAPPDATA\Programs\Postal AutoClip"
+          $exe = "$program\PostalAutoClip.exe"
+          $test = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw "Reinstalled build self-test failed: $($test.ExitCode)" }
+          $uninstaller = Get-ChildItem $program -Filter 'unins*.exe' | Select-Object -First 1
+          $uninstallSig = Get-AuthenticodeSignature -LiteralPath $uninstaller.FullName
+          if ($uninstallSig.Status -ne 'Valid') { throw "Reinstalled uninstaller is not Authenticode-valid: $($uninstallSig.Status)" }
+          $marker = "$env:LOCALAPPDATA\PostalAutoClip\lifecycle-marker.txt"
+          if ((Get-Content $marker -Raw).Trim() -ne 'creator-data-must-survive') { throw 'Creator AppData marker did not survive reinstall.' }

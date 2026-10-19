@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Postal AutoClip — Golden VOD Lab</title>
+<style>
+:root{color-scheme:dark;--bg:#090b0f;--panel:#11151c;--panel2:#171d26;--line:#293241;--text:#eef3f8;--muted:#99a7b8;--good:#5ee08a;--warn:#f4c95d;--bad:#ff6b6b;--accent:#76a9ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1500px;margin:auto;padding:22px}.top{display:flex;gap:18px;align-items:flex-end;justify-content:space-between;margin-bottom:18px}.title h1{margin:0;font-size:27px}.title p{margin:5px 0 0;color:var(--muted)}.badge{padding:7px 10px;border:1px solid var(--line);border-radius:999px;color:var(--good);font-weight:700}.grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(370px,.8fr);gap:18px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.card h2{font-size:16px;margin:0 0 12px}.controls{display:grid;grid-template-columns:1.6fr .7fr .7fr;gap:10px;margin-bottom:12px}select,input,button,textarea{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit}button{cursor:pointer;font-weight:650}button:hover{border-color:#52647c}button.primary{background:#1f4f94;border-color:#3873c8}button.danger{color:#ff9b9b}.video{width:100%;max-height:62vh;background:#000;border-radius:10px;border:1px solid var(--line)}.timebar{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}.time{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:700}.draft{display:grid;grid-template-columns:1fr 1fr 1.2fr .65fr;gap:8px;margin-top:12px}.draft2{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:8px}.hint{color:var(--muted);font-size:12px;margin-top:8px}.warning{padding:10px 12px;border-radius:9px;border:1px solid #735f28;background:#271f0d;color:#ffd978;margin-bottom:12px}.good{color:var(--good)}.bad{color:var(--bad)}table{width:100%;border-collapse:collapse}th,td{padding:8px 7px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}td.mono{font-variant-numeric:tabular-nums;white-space:nowrap}.scroll{max-height:410px;overflow:auto;border:1px solid var(--line);border-radius:9px}.row-actions{display:flex;gap:5px}.mini{padding:5px 7px;font-size:12px}.split{display:grid;grid-template-columns:1fr 1fr;gap:8px}.export{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}.status{min-height:22px;color:var(--muted);margin-top:8px;white-space:pre-wrap}.candidate-wrap{margin-top:18px}.hidden{display:none!important}.pill{font-size:11px;border:1px solid var(--line);padding:2px 6px;border-radius:999px;white-space:nowrap}.footer{margin-top:18px;color:var(--muted);font-size:12px}@media(max-width:1000px){.grid{grid-template-columns:1fr}.draft{grid-template-columns:1fr 1fr}.controls{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><div class="title"><h1>Golden VOD Lab</h1><p>Build ground truth from recordings you own or have permission to benchmark.</p></div><div id="blindBadge" class="badge">BLIND LABELING</div></div>
+  <div class="grid">
+    <section class="card">
+      <h2>1. Watch and label the VOD</h2>
+      <div class="controls">
+        <select id="job"></select>
+        <button id="reload">Reload jobs</button>
+        <button id="reveal">Reveal AutoClip candidates</button>
+      </div>
+      <div id="blindWarning" class="warning"><b>Held-out discipline:</b> label the VOD without looking at AutoClip's predictions. The first reveal permanently marks this VOD's label draft as <b>assisted</b>; reloading the page cannot make it blind again.</div>
+      <video id="video" class="video" controls preload="metadata"></video>
+      <div class="timebar">
+        <span class="time" id="now">00:00.000</span>
+        <button id="setStart">S · Set start</button><button id="setEnd">E · Set end</button>
+        <button id="back5">−5s</button><button id="forward5">+5s</button>
+        <span class="hint">Keyboard: S=start, E=end, A=add, ←/→=±2s. Shortcuts are disabled while typing in a field.</span>
+      </div>
+      <div class="draft">
+        <input id="start" type="number" min="0" step="0.001" placeholder="Start seconds" />
+        <input id="end" type="number" min="0" step="0.001" placeholder="End seconds" />
+        <select id="event"></select>
+        <input id="weight" type="number" min="0.1" max="5" step="0.1" value="1.0" title="Importance weight" />
+      </div>
+      <div class="draft2"><input id="note" maxlength="500" placeholder="Optional note: why this moment matters / boundary rationale" /><button id="add" class="primary">Add label</button></div>
+      <div class="hint">Importance is creator value, not predicted views. Use higher weights for moments the product absolutely cannot afford to miss.</div>
+    </section>
+
+    <aside class="card">
+      <h2>2. Ground-truth labels <span id="labelCount" class="pill">0</span></h2>
+      <div class="scroll"><table><thead><tr><th>Moment</th><th>Window</th><th>Type</th><th>W</th><th></th></tr></thead><tbody id="labels"></tbody></table></div>
+      <div id="saveStatus" class="status"></div>
+      <div class="export">
+        <h2>3. Export to private corpus</h2>
+        <div class="split"><input id="sessionId" placeholder="session id, e.g. postal_tob_001" /><select id="split"><option value="tuning">Tuning</option><option value="heldout">Held-out</option></select></div>
+        <div class="split" style="margin-top:8px"><input id="topk" type="number" min="1" max="20" value="3" title="Top-K metric" /><input id="maxPred" type="number" min="1" placeholder="Max predictions (optional)" /></div>
+        <button id="export" class="primary" style="width:100%;margin-top:8px">Export labels + case + manifest entry</button>
+        <div id="exportStatus" class="status"></div>
+      </div>
+    </aside>
+  </div>
+
+  <section id="candidatesCard" class="card candidate-wrap hidden">
+    <h2>AutoClip candidates — assisted review only</h2>
+    <div class="warning"><b>These are model outputs, not truth.</b> This VOD is now permanently marked assisted for benchmark purposes. It remains valid for tuning and failure analysis, but not as blind held-out ground truth.</div>
+    <div class="scroll"><table><thead><tr><th>Score</th><th>Window</th><th>Type</th><th>Story</th><th>Title / reason</th><th></th></tr></thead><tbody id="candidates"></tbody></table></div>
+  </section>
+  <div class="footer">Private label files are stored under <code>data/benchmark_labels/</code>; exported corpus cases live under <code>benchmarks/private/</code>. Both are intended to stay local and are Git-ignored.</div>
+</div>
+<script>
+const $=id=>document.getElementById(id); let currentJob=null, labels=[], predictions=[], predictionsRevealed=false, assisted=false;
+const fmt=s=>{s=Math.max(0,Number(s)||0);let m=Math.floor(s/60),sec=s-m*60;return `${String(m).padStart(2,'0')}:${sec.toFixed(3).padStart(6,'0')}`};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function json(url,opt={}){const r=await fetch(url,opt);let p={};try{p=await r.json()}catch{}if(!r.ok)throw new Error(p.detail||`${r.status} ${r.statusText}`);return p}
+function blindState(){ $('blindBadge').textContent=assisted?'ASSISTED — NOT HELD-OUT':'BLIND LABELING';$('blindBadge').style.color=assisted?'var(--warn)':'var(--good)';$('reveal').textContent=assisted?'Show AutoClip candidates':'Reveal AutoClip candidates'; }
+function checkExportState(){if($('split').value==='heldout'&&assisted)$('exportStatus').innerHTML='<span class="bad">Held-out export is permanently blocked for this VOD because AutoClip predictions were revealed. Use it as tuning data and label a different unseen VOD for held-out.</span>';else $('exportStatus').textContent=''}
+async function loadJobs(){const rows=await json('/api/jobs');$('job').innerHTML=rows.map(x=>`<option value="${x.id}">#${x.id} · ${esc(x.filename)} · ${Number(x.duration||0).toFixed(0)}s · ${x.label_count} labels${x.assisted?' · assisted':''}</option>`).join('');if(rows.length){currentJob=Number($('job').value);await loadJob(false)}else{$('job').innerHTML='<option>No processed VODs found</option>'}}
+async function loadJob(reveal=false){if(!currentJob)return;const data=await json(`/api/jobs/${currentJob}?reveal_predictions=${reveal?'true':'false'}`);labels=data.labels||[];assisted=!!data.assisted;predictionsRevealed=!!reveal;if(reveal){predictions=data.predictions||[];$('candidatesCard').classList.remove('hidden')}else{predictions=[];$('candidatesCard').classList.add('hidden')} $('video').src=`/source/${currentJob}`;$('event').innerHTML=(data.event_types||[]).map(x=>`<option value="${esc(x)}">${esc(x.replaceAll('_',' '))}</option>`).join('');renderLabels();renderCandidates();blindState();$('sessionId').value=`job_${currentJob}`;checkExportState();}
+function renderLabels(){$('labelCount').textContent=labels.length;$('labels').innerHTML=labels.map((x,i)=>`<tr><td><button class="mini" onclick="seek(${x.start})">▶ ${esc(x.id)}</button>${x.note?`<div class="hint">${esc(x.note)}</div>`:''}</td><td class="mono">${fmt(x.start)}<br>${fmt(x.end)}</td><td>${esc(x.event_type)}</td><td>${Number(x.weight).toFixed(1)}</td><td><button class="mini danger" onclick="delLabel(${i})">Delete</button></td></tr>`).join('')||'<tr><td colspan="5" class="hint">No labels yet. Watch the VOD and mark the moments a great OSRS clipper should find.</td></tr>'}
+function renderCandidates(){$('candidates').innerHTML=predictions.map((x,i)=>`<tr><td class="mono">${Number(x.score||0).toFixed(1)}</td><td class="mono">${fmt(x.start)}–${fmt(x.end)}</td><td>${esc(x.event_type||'')}</td><td>${esc(x.story_archetype||'')}</td><td>${esc(x.title||x.reason||'')}</td><td class="row-actions"><button class="mini" onclick="seek(${x.start})">▶</button><button class="mini" onclick="useCandidate(${i})">Use window</button></td></tr>`).join('')||'<tr><td colspan="6">No candidates.</td></tr>'}
+async function save(){try{const data=await json(`/api/jobs/${currentJob}/labels`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({labels})});labels=data.labels;assisted=!!data.assisted;$('saveStatus').innerHTML=`<span class="good">Saved ${labels.length} labels locally.</span>`;renderLabels();blindState();checkExportState()}catch(e){$('saveStatus').innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
+function autoId(type){let n=1,id;do{id=`${type}_${String(n++).padStart(3,'0')}`}while(labels.some(x=>x.id===id));return id}
+async function addLabel(){let start=Number($('start').value),end=Number($('end').value),event=$('event').value,weight=Number($('weight').value||1);if(!(end>start)){alert('End must be after start.');return}labels.push({id:autoId(event),start,end,event_type:event,weight,note:$('note').value.trim()});labels.sort((a,b)=>a.start-b.start);$('note').value='';await save()}
+async function delLabel(i){labels.splice(i,1);await save()}
+function seek(t){$('video').currentTime=Math.max(0,Number(t)||0);$('video').play().catch(()=>{})}
+function useCandidate(i){const x=predictions[i];$('start').value=Number(x.start).toFixed(3);$('end').value=Number(x.end).toFixed(3);if([...$('event').options].some(o=>o.value===x.event_type))$('event').value=x.event_type;seek(x.start)}
+$('video').addEventListener('timeupdate',()=>{$('now').textContent=fmt($('video').currentTime)});$('setStart').onclick=()=>{$('start').value=$('video').currentTime.toFixed(3)};$('setEnd').onclick=()=>{$('end').value=$('video').currentTime.toFixed(3)};$('back5').onclick=()=>seek($('video').currentTime-5);$('forward5').onclick=()=>seek($('video').currentTime+5);$('add').onclick=addLabel;$('reload').onclick=loadJobs;$('job').onchange=async()=>{currentJob=Number($('job').value);await loadJob(false)};
+$('reveal').onclick=async()=>{if(predictionsRevealed)return;if(!assisted&&!confirm('This permanently marks this VOD assisted and makes it ineligible for blind held-out export. Continue?'))return;await loadJob(true)};
+$('split').onchange=checkExportState;
+$('export').onclick=async()=>{try{const split=$('split').value;if(split==='heldout'&&assisted)throw new Error('Held-out export blocked: this VOD is permanently marked assisted.');const payload={session_id:$('sessionId').value.trim(),split,top_k:Number($('topk').value||3)};if($('maxPred').value)payload.max_predictions=Number($('maxPred').value);const out=await json(`/api/jobs/${currentJob}/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});$('exportStatus').innerHTML=`<span class="good">Exported ${out.label_count} labels and ${out.prediction_count} predictions as ${esc(out.labeling_mode)}.</span>\n${esc(out.case_path)}\n${esc(out.manifest_path)}`}catch(e){$('exportStatus').innerHTML=`<span class="bad">${esc(e.message)}</span>`}};
+document.addEventListener('keydown',e=>{if(['INPUT','SELECT','TEXTAREA'].includes(document.activeElement?.tagName))return;if(e.key==='s'||e.key==='S'){$('setStart').click();e.preventDefault()}else if(e.key==='e'||e.key==='E'){$('setEnd').click();e.preventDefault()}else if(e.key==='a'||e.key==='A'){$('add').click();e.preventDefault()}else if(e.key==='ArrowLeft'){seek($('video').currentTime-2);e.preventDefault()}else if(e.key==='ArrowRight'){seek($('video').currentTime+2);e.preventDefault()}});
+loadJobs().catch(e=>$('saveStatus').innerHTML=`<span class="bad">${esc(e.message)}</span>`);
+</script>
+</body>
+</html>

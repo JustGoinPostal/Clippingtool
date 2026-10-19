@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "sessions": [
+    {"id": "postal_pvp_001", "split": "tuning", "case": "private/postal_pvp_001.case.json"},
+    {"id": "postal_raids_001", "split": "heldout", "case": "private/postal_raids_001.case.json"},
+    {"id": "creator_pvm_001", "split": "heldout", "case": "private/creator_pvm_001.case.json"}
+  ],
+  "release_requirements": {
+    "min_total_labels": 60,
+    "min_heldout_labels": 24,
+    "min_heldout_sessions": 2,
+    "required_event_types": [
+      "pvp_kill",
+      "pvp_escape",
+      "player_death",
+      "raid_reward",
+      "boss_kill",
+      "pet_drop",
+      "collection_log",
+      "combat_achievement",
+      "skill_milestone"
+    ]
+  }
+}
