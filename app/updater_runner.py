@@ -15,22 +15,15 @@ def _wait_for_pid_exit(pid: int, timeout: float = 90.0) -> None:
     if os.name != "nt":
         deadline = time.time() + timeout
         while time.time() < deadline:
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                return
+            try: os.kill(pid, 0)
+            except OSError: return
             time.sleep(0.25)
         raise TimeoutError(f"Timed out waiting for PID {pid} to exit")
-
     import ctypes
-    PROCESS_SYNCHRONIZE = 0x00100000
-    WAIT_OBJECT_0 = 0x00000000
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_SYNCHRONIZE, False, int(pid))
-    if not handle:
-        return
+    handle = ctypes.windll.kernel32.OpenProcess(0x00100000, False, int(pid))
+    if not handle: return
     try:
-        result = ctypes.windll.kernel32.WaitForSingleObject(handle, int(timeout * 1000))
-        if result != WAIT_OBJECT_0:
+        if ctypes.windll.kernel32.WaitForSingleObject(handle, int(timeout * 1000)) != 0:
             raise TimeoutError(f"Timed out waiting for PID {pid} to exit")
     finally:
         ctypes.windll.kernel32.CloseHandle(handle)
@@ -41,41 +34,25 @@ def _safe_version(value: str) -> str:
 
 
 def backup_program(program_dir: Path, backup_root: Path, old_version: str) -> Path:
-    program_dir = Path(program_dir).resolve()
-    backup_root = Path(backup_root).resolve()
-    backup_root.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    destination = backup_root / f"{_safe_version(old_version)}-{stamp}" / "program"
-    if destination.exists():
-        shutil.rmtree(destination, ignore_errors=True)
-    shutil.copytree(program_dir, destination)
-    return destination
+    program_dir = Path(program_dir).resolve(); backup_root = Path(backup_root).resolve(); backup_root.mkdir(parents=True, exist_ok=True)
+    destination = backup_root / f"{_safe_version(old_version)}-{time.strftime('%Y%m%d-%H%M%S')}" / "program"
+    if destination.exists(): shutil.rmtree(destination, ignore_errors=True)
+    shutil.copytree(program_dir, destination); return destination
 
 
 def restore_program(backup_program: Path, program_dir: Path) -> None:
-    backup_program = Path(backup_program).resolve()
-    program_dir = Path(program_dir).resolve()
-    if not backup_program.exists():
-        raise FileNotFoundError(backup_program)
+    backup_program = Path(backup_program).resolve(); program_dir = Path(program_dir).resolve()
+    if not backup_program.exists(): raise FileNotFoundError(backup_program)
     failed = program_dir.with_name(program_dir.name + ".failed-update")
-    if failed.exists():
-        shutil.rmtree(failed, ignore_errors=True)
+    if failed.exists(): shutil.rmtree(failed, ignore_errors=True)
     if program_dir.exists():
-        try:
-            program_dir.replace(failed)
-        except Exception:
-            shutil.rmtree(program_dir, ignore_errors=True)
-    shutil.copytree(backup_program, program_dir, dirs_exist_ok=True)
-    shutil.rmtree(failed, ignore_errors=True)
+        try: program_dir.replace(failed)
+        except Exception: shutil.rmtree(program_dir, ignore_errors=True)
+    shutil.copytree(backup_program, program_dir, dirs_exist_ok=True); shutil.rmtree(failed, ignore_errors=True)
 
 
 def _run_installer(installer: Path) -> None:
-    cp = subprocess.run([
-        str(Path(installer).resolve()), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"
-    ], timeout=300)
-    # Inno Setup documents every non-zero setup exit code as not having run to
-    # completion. In particular, code 5 is user/Abort cancellation and must never
-    # be accepted as an update success.
+    cp = subprocess.run([str(Path(installer).resolve()), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"], timeout=300)
     if cp.returncode != 0:
         raise RuntimeError(f"Installer did not complete successfully (Inno Setup exit code {cp.returncode})")
 
@@ -88,63 +65,40 @@ def _run_self_test(app_exe: Path) -> None:
 
 
 def _launch(path: Path) -> None:
-    creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen([str(path)], cwd=str(path.parent), close_fds=True, creationflags=creationflags)
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen([str(path)], cwd=str(path.parent), close_fds=True, creationflags=flags)
 
 
 def _prune_rollbacks(root: Path, keep: int = 3) -> None:
-    root = Path(root)
-    rows = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []
-    for path in rows[max(1, keep):]:
-        shutil.rmtree(path, ignore_errors=True)
+    root = Path(root); rows = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []
+    for path in rows[max(1, keep):]: shutil.rmtree(path, ignore_errors=True)
 
 
 def apply_update(installer: Path, program_dir: Path, app_exe_name: str, parent_pid: int,
-                 old_version: str, new_version: str, expected_sha256: str, signer_subject: str) -> int:
+                 old_version: str, new_version: str, expected_sha256: str,
+                 signer_subject: str, signer_thumbprint: str) -> int:
     from .paths import APP_HOME
     from .updater import verify_installer
 
-    installer = Path(installer).resolve()
-    program_dir = Path(program_dir).resolve()
-    app_exe = program_dir / app_exe_name
-    updates = APP_HOME / "updates"
-    rollback_root = updates / "rollback"
-    log_path = updates / "updater-last.json"
-    updates.mkdir(parents=True, exist_ok=True)
-
-    status = {
-        "started_at": time.time(), "old_version": old_version, "new_version": new_version,
-        "program_dir": str(program_dir), "installer": str(installer), "status": "starting",
-    }
+    installer = Path(installer).resolve(); program_dir = Path(program_dir).resolve(); app_exe = program_dir / app_exe_name
+    updates = APP_HOME / "updates"; rollback_root = updates / "rollback"; log_path = updates / "updater-last.json"; updates.mkdir(parents=True, exist_ok=True)
+    status = {"started_at": time.time(), "old_version": old_version, "new_version": new_version, "program_dir": str(program_dir), "installer": str(installer), "status": "starting", "trusted_signer_subject": signer_subject, "trusted_signer_thumbprint": signer_thumbprint}
     try:
-        verify_installer(installer, expected_sha256, signer_subject)
-        status["status"] = "verified"
-        _wait_for_pid_exit(parent_pid)
-        backup = backup_program(program_dir, rollback_root, old_version)
-        status["backup"] = str(backup)
-        status["status"] = "installing"
+        verify_installer(installer, expected_sha256, signer_subject, signer_thumbprint)
+        status["status"] = "verified"; _wait_for_pid_exit(parent_pid)
+        backup = backup_program(program_dir, rollback_root, old_version); status["backup"] = str(backup); status["status"] = "installing"
         _run_installer(installer)
-        if not app_exe.exists():
-            raise RuntimeError("Installer completed but PostalAutoClip.exe is missing")
-        status["status"] = "health_check"
-        _run_self_test(app_exe)
-        status["status"] = "updated"; status["completed_at"] = time.time()
-        log_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
-        _prune_rollbacks(rollback_root, keep=3)
-        _launch(app_exe)
-        return 0
+        if not app_exe.exists(): raise RuntimeError("Installer completed but PostalAutoClip.exe is missing")
+        status["status"] = "health_check"; _run_self_test(app_exe)
+        status["status"] = "updated"; status["completed_at"] = time.time(); log_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
+        _prune_rollbacks(rollback_root, keep=3); _launch(app_exe); return 0
     except Exception as exc:
         status["error"] = f"{type(exc).__name__}: {exc}"; status["status"] = "rolling_back"
         try:
             backup_path = Path(str(status.get("backup") or ""))
             if backup_path.exists():
-                restore_program(backup_path, program_dir)
-                old_exe = program_dir / app_exe_name
-                _run_self_test(old_exe)
-                status["status"] = "rolled_back"
-                _launch(old_exe)
-            else:
-                status["status"] = "rollback_unavailable"
+                restore_program(backup_path, program_dir); old_exe = program_dir / app_exe_name; _run_self_test(old_exe); status["status"] = "rolled_back"; _launch(old_exe)
+            else: status["status"] = "rollback_unavailable"
         except Exception as rollback_exc:
             status["rollback_error"] = f"{type(rollback_exc).__name__}: {rollback_exc}"; status["status"] = "rollback_failed"
         status["completed_at"] = time.time()
@@ -155,16 +109,12 @@ def apply_update(installer: Path, program_dir: Path, app_exe_name: str, parent_p
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Postal AutoClip update/rollback runner")
-    parser.add_argument("--apply", required=True, type=Path)
-    parser.add_argument("--program-dir", required=True, type=Path)
-    parser.add_argument("--app-exe", default="PostalAutoClip.exe")
-    parser.add_argument("--parent-pid", type=int, default=0)
-    parser.add_argument("--old-version", default="unknown")
-    parser.add_argument("--new-version", required=True)
-    parser.add_argument("--sha256", required=True)
-    parser.add_argument("--signer-subject", required=True)
+    parser.add_argument("--apply", required=True, type=Path); parser.add_argument("--program-dir", required=True, type=Path)
+    parser.add_argument("--app-exe", default="PostalAutoClip.exe"); parser.add_argument("--parent-pid", type=int, default=0)
+    parser.add_argument("--old-version", default="unknown"); parser.add_argument("--new-version", required=True)
+    parser.add_argument("--sha256", required=True); parser.add_argument("--signer-subject", required=True); parser.add_argument("--signer-thumbprint", required=True)
     args = parser.parse_args(argv)
-    return apply_update(args.apply, args.program_dir, args.app_exe, args.parent_pid, args.old_version, args.new_version, args.sha256, args.signer_subject)
+    return apply_update(args.apply, args.program_dir, args.app_exe, args.parent_pid, args.old_version, args.new_version, args.sha256, args.signer_subject, args.signer_thumbprint)
 
 
 if __name__ == "__main__":
