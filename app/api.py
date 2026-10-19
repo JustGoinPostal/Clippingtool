@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import ROOT, load_settings, save_settings
 from . import db
 from .watcher import scan_once, start_watcher
-from .pipeline import process_job, render_clip_id, render_all_variants
+from .pipeline import process_job, render_clip_id, render_all_variants, rerun_render_qa
 from .learning import learned_profile, audience_profile
 from .hooks import generate_hook
 from .covers import ensure_cover
@@ -146,6 +146,16 @@ def render_all(clip_id:int):
 
 @app.get("/api/clips/{clip_id}/renders")
 def renders(clip_id:int): return db.clip_renders(clip_id)
+
+@app.post("/api/renders/{render_id}/qa")
+def render_qa_recheck(render_id:int):
+    try:
+        result=rerun_render_qa(render_id)
+        return {"ok":True,**result}
+    except KeyError:
+        raise HTTPException(404,"Render not found")
+    except Exception as e:
+        raise HTTPException(500,f"Render QA failed: {type(e).__name__}: {e}")
 
 @app.post("/api/clips/{clip_id}/decision")
 def decision(clip_id:int,payload:dict=Body(...)):
