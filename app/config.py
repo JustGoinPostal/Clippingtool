@@ -85,6 +85,11 @@ class Settings(BaseModel):
     # v0.6 publishing queue
     publishing_enabled: bool = True
     publish_poll_seconds: int = 20
+    publish_max_attempts: int = 5
+    publish_retry_base_seconds: int = 60
+    publish_retry_max_seconds: int = 3600
+    publish_stale_seconds: int = 600
+    youtube_resumable_retries: int = 5
     youtube_default_privacy: str = "private"
     tiktok_default_privacy: str = "SELF_ONLY"
 
