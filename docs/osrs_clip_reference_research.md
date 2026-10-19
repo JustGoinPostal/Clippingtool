@@ -24,6 +24,81 @@ Checked: 2026-10-18/19.
 - DMM / All Stars competitive clip set
   - https://dmmosrs.com/events/all-stars-season-3/clips
 
+## Rights-aware public-reference policy
+
+Postal AutoClip deliberately separates **public metadata research** from **structural media analysis**.
+
+### Standard YouTube-license/public videos
+
+Public metadata can be used as a market/reference signal:
+- video id / public URL
+- creator/channel title
+- public title
+- publish time
+- duration
+- public view/like counts
+- embeddable status
+- reported YouTube license
+- AutoClip-defined category
+
+These references are `metadata_only`. They must not contain copied descriptions, tags, transcripts, captions, frames, source media, or hook/payoff timing annotations.
+
+### Creative Commons or explicitly permissioned videos
+
+A reference can contribute frame/timing/edit observations only when one of these is true:
+1. the official YouTube Data API reports `status.license=creativeCommon`, or
+2. the creator/rightsholder has explicitly granted permission and that permission is recorded.
+
+Those references may contain AutoClip's derived structural annotations such as:
+- hook time
+- setup time
+- payoff time
+- reaction tail
+- presence of facecam / burned captions / zooms / hard cuts
+- AutoClip-defined hook/payoff archetypes
+
+The source video itself still does not belong in this repository unless the rights grant explicitly allows that use.
+
+### Why the separation is enforced in code
+
+`app/public_reference.py` rejects timing/edit annotations for `metadata_only` references. `creative_commons` mode requires the verified Creative Commons license value, while `permission` mode requires an explicit permission confirmation. This prevents a future developer from accidentally turning a list of public links into an unlicensed training/test corpus.
+
+## Official YouTube API workflow
+
+`app/youtube_reference_api.py` uses the official YouTube Data API rather than scraping YouTube pages.
+
+Set a local API key outside Git:
+
+```powershell
+$env:YOUTUBE_DATA_API_KEY="..."
+```
+
+Import public metadata for known references:
+
+```powershell
+postal-autoclip-reference fetch https://www.youtube.com/watch?v=VIDEO_ID --category pvp
+```
+
+Search specifically for Creative Commons OSRS references:
+
+```powershell
+postal-autoclip-reference search-cc --query "Old School RuneScape PvP" --category pvp --max-results 20
+```
+
+Generate an aggregate report:
+
+```powershell
+postal-autoclip-reference report
+```
+
+The local catalog is stored at `data/public_reference_catalog.json` and is Git-ignored. A small checked-in starter list of public **metadata-only** examples lives at `references/osrs_public_metadata_seeds.json`.
+
+Seed it locally with:
+
+```powershell
+postal-autoclip-reference seed .\references\osrs_public_metadata_seeds.json
+```
+
 ## Observed patterns
 
 ### 1. The payoff is the title
@@ -63,6 +138,9 @@ AutoClip implication: event value, rarity, item identity, target identity, damag
 - `app/hooks.py`: exact OSRS context can generate hooks from item/value/damage instead of generic hype.
 - `app/metadata.py`: titles can use item, target, value and damage context.
 - `app/benchmark.py`: objective precision/recall/boundary benchmark for labeled VODs.
+- `app/public_reference.py`: rights-aware public metadata / structural reference catalog.
+- `app/youtube_reference_api.py`: official YouTube Data API metadata + Creative Commons discovery.
+- `app/reference_research.py`: local CLI for seeding, refreshing, CC discovery, and aggregate reference reporting.
 
 ## Important constraint
 
