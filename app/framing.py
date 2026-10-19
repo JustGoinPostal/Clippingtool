@@ -14,11 +14,19 @@ def _finite_ratio(value: Any) -> float | None:
 
 
 def build_focus_keyframes(game_events: list[dict] | None, start: float, end: float) -> list[dict[str,float]]:
-    """Return de-duplicated RuneLite focus points for one rendered clip.
+    """Return de-duplicated RuneLite framing points for one rendered clip.
 
-    Event times are recording-relative. Output times are clip-relative so they can be
-    used directly by FFmpeg expressions after the input seek. bridge_focus samples
-    provide motion continuity; exact gameplay events provide authoritative anchors.
+    The streamer/local player is the primary visual anchor. Current companion
+    builds send player_x_ratio/player_y_ratio separately from target positions and
+    from the older midpoint-style focus_x_ratio/focus_y_ratio fields. Centering on
+    the local player prevents a large boss or PvP target from dragging the vertical
+    crop away from the streamer. Older companion events remain compatible by
+    falling back to the legacy focus ratios when player ratios are unavailable.
+
+    Event times are recording-relative. Output times are clip-relative so they can
+    be used directly by FFmpeg expressions after the input seek. bridge_focus/state
+    samples provide motion continuity; exact gameplay events provide authoritative
+    anchors.
     """
     if not game_events or end <= start:
         return []
@@ -28,8 +36,15 @@ def build_focus_keyframes(game_events: list[dict] | None, start: float, end: flo
         if t < start-2.0 or t > end+2.0:
             continue
         payload=ev.get("payload") or {}
-        x=_finite_ratio(payload.get("focus_x_ratio"))
-        y=_finite_ratio(payload.get("focus_y_ratio"))
+        # Prefer the local player's actual RuneLite canvas position. The legacy
+        # focus point may be the midpoint between player and target and therefore
+        # should only be used for backward compatibility.
+        player_x=_finite_ratio(payload.get("player_x_ratio"))
+        player_y=_finite_ratio(payload.get("player_y_ratio"))
+        legacy_x=_finite_ratio(payload.get("focus_x_ratio"))
+        legacy_y=_finite_ratio(payload.get("focus_y_ratio"))
+        x=player_x if player_x is not None else legacy_x
+        y=player_y if player_y is not None else legacy_y
         if x is None:
             continue
         typ=str(ev.get("event_type") or "")
@@ -100,13 +115,13 @@ def focus_y_ratio_expression(keyframes: list[dict[str,float]], time_var: str = "
 
 
 def crop_x_expression(keyframes: list[dict[str,float]]) -> str:
-    """Center a vertical crop on the RuneLite focus ratio while clamping to source bounds."""
+    """Center a vertical crop on the RuneLite player ratio while clamping to source bounds."""
     ratio=focus_ratio_expression(keyframes,"x","t")
     return f"max(0,min(iw-ow,iw*({ratio})-ow/2))"
 
 
 def zoompan_y_expression(keyframes: list[dict[str,float]], fps: float = 30.0) -> str:
-    """Keep RuneLite's vertical subject near center during zoom without leaving frame bounds."""
+    """Keep RuneLite's local player near center during zoom without leaving frame bounds."""
     time_var=f"on/{max(1.0,float(fps)):.6f}"
     ratio=focus_y_ratio_expression(keyframes,time_var)
     return f"max(0,min(ih-ih/zoom,ih*({ratio})-ih/(2*zoom)))"
