@@ -54,8 +54,10 @@ jobs:
           $cer = Join-Path $env:RUNNER_TEMP 'postal-autoclip-lifecycle.cer'
           Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $password | Out-Null
           Export-Certificate -Cert $cert -FilePath $cer | Out-Null
-          Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
-          Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\CurrentUser\TrustedPublisher' | Out-Null
+          & certutil.exe -user -addstore -f Root $cer | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "certutil Root import failed with exit code $LASTEXITCODE" }
+          & certutil.exe -user -addstore -f TrustedPublisher $cer | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "certutil TrustedPublisher import failed with exit code $LASTEXITCODE" }
           "POSTAL_CODESIGN_PFX=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "POSTAL_CODESIGN_PASSWORD=$passwordText" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "POSTAL_CODESIGN_SKIP_TIMESTAMP=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
