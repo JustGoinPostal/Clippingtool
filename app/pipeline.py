@@ -138,12 +138,21 @@ def render_clip_id(clip_id: int, variant: str|None=None):
     job=db.q("SELECT * FROM jobs WHERE id=?",(clip["job_id"],),one=True)
     source=Path(job["source_path"])
     key=_key(source)
-    tx=json.loads((s.cache_path/key/"transcript.json").read_text(encoding="utf-8"))
+    cache=s.cache_path/key
+    tx=json.loads((cache/"transcript.json").read_text(encoding="utf-8"))
+    game_events=[]
+    runelite_path=cache/"runelite_events.json"
+    if runelite_path.exists():
+        try:
+            payload=json.loads(runelite_path.read_text(encoding="utf-8"))
+            game_events=payload.get("events",[]) if isinstance(payload,dict) else []
+        except Exception:
+            game_events=[]
     safe="".join(c if c.isalnum() or c in "-_" else "_" for c in clip["title"][:45]).strip("_") or f"clip_{clip_id}"
     out=s.output_path/f"{clip_id:04d}_{variant}_{safe}.mp4"
     db.exec_sql("UPDATE clips SET status='rendering' WHERE id=?",(clip_id,))
     try:
-        result=render_clip(source,clip,tx.get("words",[]),out,s,variant=variant)
+        result=render_clip(source,clip,tx.get("words",[]),out,s,variant=variant,game_events=game_events)
         quality=(evaluate_render(clip,tx.get("words",[]),result,str(clip.get("hook_text") or ""))
                  if s.quality_scoring_enabled else {"score":0.0})
         db.upsert_render(clip_id,variant,str(out),result["start"],result["end"],result["focus"],
