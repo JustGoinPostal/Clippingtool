@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -23,6 +23,11 @@ TIKTOK_TOKEN=SECRETS/"tiktok_token.json"
 INSTAGRAM_TOKEN=SECRETS/"instagram_token.json"
 _worker_started=False
 _worker_lock=threading.Lock()
+Checkpoint = Callable[[str, dict[str, Any]], None]
+
+
+class SubmissionUncertain(RuntimeError):
+    """The platform may have accepted a post, so automatic replay could duplicate it."""
 
 
 def _json_load(path: Path) -> dict[str,Any]:
@@ -36,6 +41,13 @@ def _caption_with_hashtags(post: dict[str,Any],limit:int) -> str:
     tags=str(post.get("hashtags") or "").strip()
     text=(caption+("\n\n"+tags if tags else "")).strip()
     return text[:limit]
+
+
+def _retry_delay(attempts: int) -> float:
+    s=load_settings()
+    base=max(5,int(s.publish_retry_base_seconds))
+    cap=max(base,int(s.publish_retry_max_seconds))
+    return float(min(cap,base*(2**max(0,int(attempts)-1))))
 
 # -------------------- YouTube --------------------
 def youtube_connection_status() -> dict[str,Any]:
@@ -81,8 +93,18 @@ def publish_youtube(path: Path,post: dict[str,Any]) -> dict[str,Any]:
           "status":{"privacyStatus":privacy,"selfDeclaredMadeForKids":False}}
     media=MediaFileUpload(str(path),mimetype="video/mp4",chunksize=-1,resumable=True)
     request=service.videos().insert(part="snippet,status",body=body,media_body=media)
-    response=None
-    while response is None: _,response=request.next_chunk()
+    response=None; started=False
+    try:
+        while response is None:
+            started=True
+            _,response=request.next_chunk(num_retries=max(0,int(load_settings().youtube_resumable_retries)))
+    except Exception as e:
+        if started:
+            raise SubmissionUncertain(
+                "YouTube upload was interrupted after the resumable request started. "
+                "AutoClip will not blindly retry because that could create a duplicate."
+            ) from e
+        raise
     video_id=response.get("id"); raw={"upload":response}
     cover_path=post.get("_cover_path")
     if video_id and cover_path and load_settings().youtube_set_thumbnail:
@@ -97,7 +119,13 @@ def publish_youtube(path: Path,post: dict[str,Any]) -> dict[str,Any]:
 def _tiktok_access_token() -> str:
     env=os.getenv("POSTAL_TIKTOK_ACCESS_TOKEN","").strip()
     if env: return env
-    return str(_json_load(TIKTOK_TOKEN).get("access_token") or "").strip()
+    data={}
+    try:
+        from .social_auth import refresh_tiktok_token
+        data=refresh_tiktok_token()
+    except Exception:
+        data=_json_load(TIKTOK_TOKEN)
+    return str(data.get("access_token") or "").strip()
 
 
 def tiktok_connection_status() -> dict[str,Any]:
@@ -108,7 +136,7 @@ def tiktok_connection_status() -> dict[str,Any]:
 def tiktok_creator_info() -> dict[str,Any]:
     token=_tiktok_access_token()
     if not token:
-        raise RuntimeError("TikTok access token missing. Set POSTAL_TIKTOK_ACCESS_TOKEN or save {\"access_token\":\"...\"} in secrets/tiktok_token.json.")
+        raise RuntimeError("TikTok access token missing. Set POSTAL_TIKTOK_ACCESS_TOKEN or connect TikTok in Accounts.")
     with httpx.Client(timeout=30) as client:
         r=client.post("https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
             headers={"Authorization":f"Bearer {token}","Content-Type":"application/json; charset=UTF-8"},json={})
@@ -131,12 +159,30 @@ def tiktok_publish_status(publish_id: str) -> dict[str,Any]:
 
 
 def _tiktok_chunk_plan(size:int)->tuple[int,int]:
-    chunk=10*1024*1024; count=max(1,math.ceil(size/chunk))
-    if count==1: chunk=size
-    return chunk,count
+    """Match TikTok's documented floor-count rule and merge trailing bytes into the final chunk."""
+    size=max(0,int(size))
+    if size <= 0: raise ValueError("TikTok upload is empty")
+    target=10_000_000
+    if size < target:
+        return size,1
+    count=max(1,size//target)
+    return target,int(count)
 
 
-def publish_tiktok(path: Path,post: dict[str,Any]) -> dict[str,Any]:
+def _tiktok_put_chunk(client:httpx.Client,upload_url:str,mime:str,blob:bytes,first:int,size:int)->None:
+    last=first+len(blob)-1
+    retries=max(1,min(6,int(load_settings().publish_max_attempts)))
+    for attempt in range(retries):
+        r=client.put(upload_url,headers={"Content-Type":mime,"Content-Length":str(len(blob)),
+            "Content-Range":f"bytes {first}-{last}/{size}"},content=blob)
+        if r.status_code < 500:
+            r.raise_for_status(); return
+        if attempt+1>=retries:
+            r.raise_for_status()
+        time.sleep(min(8.0,0.75*(2**attempt)))
+
+
+def publish_tiktok(path: Path,post: dict[str,Any],checkpoint:Checkpoint|None=None) -> dict[str,Any]:
     token=_tiktok_access_token()
     if not token: raise RuntimeError("TikTok is not connected.")
     if not path.exists(): raise FileNotFoundError(path)
@@ -156,14 +202,23 @@ def publish_tiktok(path: Path,post: dict[str,Any]) -> dict[str,Any]:
         if err.get("code") not in {None,"ok"}: raise RuntimeError(f"TikTok publish-init error: {err.get('code')}: {err.get('message')}")
         info=payload.get("data") or {}; upload_url=info.get("upload_url"); publish_id=info.get("publish_id")
         if not upload_url or not publish_id: raise RuntimeError("TikTok did not return upload_url/publish_id")
+        if checkpoint:
+            try: checkpoint(str(publish_id),{"creator":creator,"publish_id":publish_id,"phase":"initialized"})
+            except Exception as e:
+                raise SubmissionUncertain("TikTok created a publish task but AutoClip could not save its checkpoint.") from e
         mime=mimetypes.guess_type(path.name)[0] or "video/mp4"
         with path.open("rb") as fh:
             first=0
-            while first<size:
-                blob=fh.read(min(chunk_size,size-first)); last=first+len(blob)-1
-                up=client.put(upload_url,headers={"Content-Type":mime,"Content-Length":str(len(blob)),
-                    "Content-Range":f"bytes {first}-{last}/{size}"},content=blob)
-                up.raise_for_status(); first=last+1
+            for index in range(total_chunks):
+                remaining=size-first
+                wanted=remaining if index==total_chunks-1 else min(chunk_size,remaining)
+                blob=fh.read(wanted)
+                if len(blob)!=wanted:
+                    raise IOError(f"TikTok upload read {len(blob)} bytes, expected {wanted}")
+                _tiktok_put_chunk(client,str(upload_url),mime,blob,first,size)
+                first += len(blob)
+            if first != size:
+                raise IOError(f"TikTok upload ended at {first} bytes, expected {size}")
     return {"platform_post_id":publish_id,"url":"","raw":{"creator":creator,"publish_id":publish_id},"async":True}
 
 # -------------------- Instagram Reels --------------------
@@ -187,7 +242,7 @@ def _graph_url(path: str) -> str:
     return f"https://graph.facebook.com/{version}/{path.lstrip('/')}"
 
 
-def publish_instagram(path: Path,post: dict[str,Any]) -> dict[str,Any]:
+def publish_instagram(path: Path,post: dict[str,Any],checkpoint:Checkpoint|None=None) -> dict[str,Any]:
     token,user_id=_instagram_credentials()
     if not token or not user_id:
         raise RuntimeError("Instagram is not connected. Add access_token and ig_user_id to secrets/instagram_token.json.")
@@ -202,6 +257,10 @@ def publish_instagram(path: Path,post: dict[str,Any]) -> dict[str,Any]:
         init.raise_for_status(); data=init.json(); container_id=str(data.get("id") or ""); upload_uri=str(data.get("uri") or "")
         if not container_id or not upload_uri:
             raise RuntimeError(f"Instagram did not return a container id/upload uri: {data}")
+        if checkpoint:
+            try: checkpoint(container_id,{"container_id":container_id,"phase":"initialized"})
+            except Exception as e:
+                raise SubmissionUncertain("Instagram created a media container but AutoClip could not save its checkpoint.") from e
         size=path.stat().st_size
         with path.open("rb") as fh:
             stream=iter(lambda:fh.read(1024*1024),b"")
@@ -257,24 +316,65 @@ def _publish_one(row: dict[str,Any]):
             cover,_=ensure_cover(render,clip); post["_cover_path"]=str(cover)
         except Exception:
             pass
+
+    def checkpoint(platform_post_id:str,raw:dict[str,Any]):
+        db.update_publish_job(int(row["id"]),status="submitted",platform_post_id=platform_post_id,
+            result_json=json.dumps(raw,default=str)[:20000],error="")
+
     if row["platform"]=="youtube": return publish_youtube(path,post)
-    if row["platform"]=="tiktok": return publish_tiktok(path,post)
-    if row["platform"]=="instagram": return publish_instagram(path,post)
+    if row["platform"]=="tiktok": return publish_tiktok(path,post,checkpoint=checkpoint)
+    if row["platform"]=="instagram": return publish_instagram(path,post,checkpoint=checkpoint)
     raise RuntimeError(f"Unknown platform: {row['platform']}")
 
 
+def recover_interrupted_posts() -> int:
+    """Fail closed after a crash so an uncertain upload is never blindly duplicated."""
+    now=time.time(); stale=max(60,int(load_settings().publish_stale_seconds)); changed=0
+    rows=db.q("SELECT * FROM publish_queue WHERE status='publishing'")
+    for row in rows:
+        last=float(row.get("last_attempt_at") or 0)
+        if last and now-last < stale: continue
+        if str(row.get("platform_post_id") or ""):
+            db.update_publish_job(int(row["id"]),status="submitted",error="Recovered platform checkpoint after restart.")
+        else:
+            db.update_publish_job(int(row["id"]),status="needs_review",
+                error="AutoClip restarted during an upload before a platform checkpoint was saved. Review before retrying to avoid a duplicate.")
+        changed+=1
+    return changed
+
+
 def process_due_posts(limit:int=5):
-    rows=db.q("SELECT * FROM publish_queue WHERE status='queued' AND scheduled_for<=? ORDER BY scheduled_for,id LIMIT ?",(time.time(),int(limit)))
+    now=time.time(); s=load_settings()
+    rows=db.q("""SELECT * FROM publish_queue
+                  WHERE status='queued' AND scheduled_for<=? AND (next_attempt_at<=0 OR next_attempt_at<=?)
+                  ORDER BY scheduled_for,id LIMIT ?""",(now,now,int(limit)))
     for row in rows:
         job_id=int(row["id"]); attempts=int(row.get("attempts") or 0)+1
-        db.update_publish_job(job_id,status="publishing",attempts=attempts,error="")
+        db.update_publish_job(job_id,status="publishing",attempts=attempts,error="",last_attempt_at=time.time())
         try:
             result=_publish_one(row); asynchronous=bool(result.get("async"))
             db.update_publish_job(job_id,status="submitted" if asynchronous else "published",
                 platform_post_id=result.get("platform_post_id",""),platform_url=result.get("url",""),
-                published_at=0 if asynchronous else time.time(),result_json=json.dumps(result.get("raw") or {},default=str)[:20000])
+                published_at=0 if asynchronous else time.time(),next_attempt_at=0,
+                result_json=json.dumps(result.get("raw") or {},default=str)[:20000],error="")
+        except SubmissionUncertain as e:
+            current=db.q("SELECT * FROM publish_queue WHERE id=?",(job_id,),one=True) or {}
+            if str(current.get("platform_post_id") or ""):
+                db.update_publish_job(job_id,status="submitted",next_attempt_at=0,error=str(e))
+            else:
+                db.update_publish_job(job_id,status="needs_review",next_attempt_at=0,error=str(e))
         except Exception as e:
-            db.update_publish_job(job_id,status="failed" if attempts>=3 else "queued",error=f"{type(e).__name__}: {e}")
+            current=db.q("SELECT * FROM publish_queue WHERE id=?",(job_id,),one=True) or {}
+            if str(current.get("platform_post_id") or ""):
+                db.update_publish_job(job_id,status="submitted",next_attempt_at=0,
+                    error=f"Upload interrupted after platform checkpoint: {type(e).__name__}: {e}")
+                continue
+            if attempts>=max(1,int(s.publish_max_attempts)):
+                db.update_publish_job(job_id,status="failed",next_attempt_at=0,error=f"{type(e).__name__}: {e}")
+            else:
+                retry_at=time.time()+_retry_delay(attempts)
+                db.update_publish_job(job_id,status="queued",next_attempt_at=retry_at,
+                    error=f"Attempt {attempts} failed; retry scheduled: {type(e).__name__}: {e}")
 
 
 def poll_submitted_tiktok(limit:int=10):
@@ -316,6 +416,7 @@ def start_publish_worker():
     with _worker_lock:
         if _worker_started:return
         _worker_started=True
+    recover_interrupted_posts()
     def loop():
         while True:
             try:
