@@ -33,17 +33,40 @@ def test_save_load_labels_is_local_and_atomic(tmp_path: Path, monkeypatch):
     assert benchmark_labeler.load_labels(7)==saved
     payload=json.loads((tmp_path/"labels"/"job_7.labels.json").read_text(encoding="utf-8"))
     assert payload["job_id"]==7
+    assert payload["assisted"] is False
     assert payload["labels"][1]["event_type"]=="pet_drop"
     assert not (tmp_path/"labels"/"job_7.labels.tmp").exists()
 
 
-def test_heldout_export_refuses_assisted_labeling(tmp_path: Path, monkeypatch):
+def test_revealing_predictions_permanently_marks_label_draft_assisted(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(benchmark_labeler,"LABEL_DIR",tmp_path/"labels")
+    monkeypatch.setattr(benchmark_labeler,"_job",lambda job_id:{"id":job_id,"source_path":"vod.mp4"})
+    benchmark_labeler.save_labels(8,[
+        {"id":"truth","start":1,"end":4,"event_type":"pvp_kill","weight":1.0},
+    ])
+    assert benchmark_labeler.load_label_state(8)["assisted"] is False
+    marked=benchmark_labeler.mark_assisted(8)
+    assert marked["assisted"] is True
+
+    # Editing/saving labels after the reveal must never reset contamination.
+    benchmark_labeler.save_labels(8,[
+        {"id":"truth","start":1.2,"end":4.2,"event_type":"pvp_kill","weight":1.0},
+    ])
+    reloaded=benchmark_labeler.load_label_state(8)
+    assert reloaded["assisted"] is True
+    assert reloaded["labels"][0]["start"]==1.2
+
+
+def test_heldout_export_refuses_server_marked_assisted_labeling(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(benchmark_labeler,"_job",lambda job_id:{"id":job_id,"source_path":"owned.mp4"})
-    monkeypatch.setattr(benchmark_labeler,"load_labels",lambda job_id:[{"id":"truth","start":1,"end":3,"event_type":"pvp_kill","weight":1.0}])
+    monkeypatch.setattr(benchmark_labeler,"load_label_state",lambda job_id:{
+        "schema_version":1,"job_id":job_id,"assisted":True,
+        "labels":[{"id":"truth","start":1,"end":3,"event_type":"pvp_kill","weight":1.0}],
+    })
     monkeypatch.setattr(benchmark_labeler,"PRIVATE_DIR",tmp_path/"private")
     monkeypatch.setattr(benchmark_labeler,"MANIFEST_PATH",tmp_path/"private"/"corpus.json")
-    with pytest.raises(ValueError,match="held-out sessions must be labeled blind"):
-        benchmark_labeler.export_session(1,"held_001","heldout",blind_labeled=False)
+    with pytest.raises(ValueError,match="permanently marked assisted"):
+        benchmark_labeler.export_session(1,"held_001","heldout")
 
 
 def test_export_writes_private_case_and_manifest_without_media(monkeypatch, tmp_path: Path):
@@ -52,16 +75,18 @@ def test_export_writes_private_case_and_manifest_without_media(monkeypatch, tmp_
     monkeypatch.setattr(benchmark_labeler,"MANIFEST_PATH",private/"corpus.json")
     monkeypatch.setattr(benchmark_labeler,"EXAMPLE_MANIFEST",tmp_path/"missing.example.json")
     monkeypatch.setattr(benchmark_labeler,"_job",lambda job_id:{"id":job_id,"source_path":"C:/private/owned_vod.mp4","status":"ready","duration":600})
-    monkeypatch.setattr(benchmark_labeler,"load_labels",lambda job_id:[
-        {"id":"purple","start":50,"end":65,"event_type":"raid_reward","weight":2.0}
-    ])
+    monkeypatch.setattr(benchmark_labeler,"load_label_state",lambda job_id:{
+        "schema_version":1,"job_id":job_id,"assisted":False,
+        "labels":[{"id":"purple","start":50,"end":65,"event_type":"raid_reward","weight":2.0}],
+    })
     monkeypatch.setattr(benchmark_labeler,"export_job_case",lambda job_id,labels,top_k,max_predictions:{
         "schema_version":1,"job_id":job_id,"top_k":top_k,"labels":labels,
         "predictions":[{"clip_id":9,"start":49,"end":67,"score":95,"event_type":"raid_reward"}],
     })
-    out=benchmark_labeler.export_session(4,"postal cox 001","heldout",blind_labeled=True)
+    out=benchmark_labeler.export_session(4,"postal cox 001","heldout")
     assert out["session_id"]=="postal_cox_001"
     assert out["split"]=="heldout"
+    assert out["labeling_mode"]=="blind"
     case=json.loads((private/"postal_cox_001.case.json").read_text(encoding="utf-8"))
     serialized=json.dumps(case)
     assert case["labeling_mode"]=="blind"
@@ -71,3 +96,23 @@ def test_export_writes_private_case_and_manifest_without_media(monkeypatch, tmp_
     assert manifest["sessions"]==[{
         "id":"postal_cox_001","split":"heldout","case":"postal_cox_001.case.json","labeling_mode":"blind"
     }]
+
+
+def test_assisted_session_can_export_only_as_tuning(monkeypatch, tmp_path: Path):
+    private=tmp_path/"private"
+    monkeypatch.setattr(benchmark_labeler,"PRIVATE_DIR",private)
+    monkeypatch.setattr(benchmark_labeler,"MANIFEST_PATH",private/"corpus.json")
+    monkeypatch.setattr(benchmark_labeler,"EXAMPLE_MANIFEST",tmp_path/"missing.example.json")
+    monkeypatch.setattr(benchmark_labeler,"_job",lambda job_id:{"id":job_id,"source_path":"owned.mp4","status":"ready","duration":100})
+    monkeypatch.setattr(benchmark_labeler,"load_label_state",lambda job_id:{
+        "schema_version":1,"job_id":job_id,"assisted":True,
+        "labels":[{"id":"kill","start":10,"end":20,"event_type":"pvp_kill","weight":1.0}],
+    })
+    monkeypatch.setattr(benchmark_labeler,"export_job_case",lambda job_id,labels,top_k,max_predictions:{
+        "schema_version":1,"job_id":job_id,"top_k":top_k,"labels":labels,"predictions":[],
+    })
+    out=benchmark_labeler.export_session(9,"assisted_pvp_001","tuning")
+    assert out["labeling_mode"]=="assisted"
+    assert out["blind_labeled"] is False
+    manifest=json.loads((private/"corpus.json").read_text(encoding="utf-8"))
+    assert manifest["sessions"][0]["labeling_mode"]=="assisted"
