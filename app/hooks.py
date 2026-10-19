@@ -24,15 +24,49 @@ def _item_name(text: str) -> str:
     return ""
 
 
+def _context_item(ctx: dict) -> str:
+    if ctx.get("name") and str(ctx.get("moment_archetype") or "") == "reward_reveal":
+        return str(ctx["name"]).strip().upper()
+    for row in ctx.get("items") or []:
+        if isinstance(row,dict) and row.get("name"):
+            return str(row["name"]).strip().upper()
+    return ""
+
+
+def _gp(value) -> str:
+    try: n=float(value or 0)
+    except Exception: return ""
+    if n >= 1_000_000_000: return f"{n/1_000_000_000:.1f}B".replace(".0B","B")
+    if n >= 1_000_000: return f"{n/1_000_000:.1f}M".replace(".0M","M")
+    if n >= 1_000: return f"{n/1_000:.0f}K"
+    return str(int(n)) if n > 0 else ""
+
+
 def generate_hook(clip: dict) -> str:
-    """Generate a short, deterministic overlay hook with no paid/cloud AI dependency."""
+    """Generate a short OSRS-aware overlay hook with no paid/cloud dependency."""
     event=str(clip.get("event_type") or "speech").lower()
+    ctx=clip.get("event_context") if isinstance(clip.get("event_context"),dict) else {}
+    archetype=str(clip.get("story_archetype") or ctx.get("moment_archetype") or "")
     text=" ".join([
         str(clip.get("title") or ""),
         str(clip.get("transcript") or ""),
         str(clip.get("reason") or ""),
     ])
-    item=_item_name(text)
+    item=_context_item(ctx) or _item_name(text)
+
+    if archetype in {"high_value_pk","pvp_finish"}:
+        value=_gp(ctx.get("loot_value") or ctx.get("total_value"))
+        hit=int(float(ctx.get("biggest_setup_hit",0) or 0))
+        if value:
+            return f"{value} ON THE FLOOR"
+        if hit >= 55:
+            return f"{hit} INTO THE KO"
+        return "HE'S ACTUALLY DEAD"
+    if archetype == "reward_reveal" and item:
+        return f"{item}. NO WAY."
+    if archetype == "death_collapse":
+        hit=int(float(ctx.get("biggest_hit_taken",0) or 0))
+        return f"{hit} DAMAGE. I'M DEAD." if hit >= 45 else "THIS WENT WRONG FAST"
 
     if item:
         if event in {"raid_reward","drop","rare_drop","collection_log","loot","npc_loot"}:
@@ -41,7 +75,8 @@ def generate_hook(clip: dict) -> str:
     if event in {"pvp","pvp_kill","player_loot","combat"}:
         return "HE DID NOT EXPECT THAT"
     if event=="big_hit":
-        return "THAT SPEC WAS DISGUSTING"
+        amount=int(float(ctx.get("amount",0) or 0))
+        return f"{amount} DAMAGE?!" if amount >= 50 else "THAT SPEC WAS DISGUSTING"
     if event=="big_hit_taken":
         return "THAT ALMOST ENDED THE RUN"
     if event in {"raid_reward","raid_complete"}:
