@@ -50,10 +50,8 @@ class Settings(BaseModel):
 
     # Keep a visible facecam in vertical edits without using it for clip scoring.
     webcam_overlay_enabled: bool = True
-    webcam_region: str = "auto"  # auto/manual or an explicit source corner
+    webcam_region: str = "auto"
     webcam_crop_width_ratio: float = 0.30
-    # Postal's OBS camera rectangle measured from the full source frame. These are
-    # normalized coordinates so the crop stays correct at 1280x720, 1920x1080, etc.
     webcam_manual_enabled: bool = True
     webcam_manual_x_ratio: float = 0.720
     webcam_manual_y_ratio: float = 0.000
@@ -81,6 +79,21 @@ class Settings(BaseModel):
     dynamic_beat_seconds: float = 1.15
     quality_scoring_enabled: bool = True
     best_variant_auto_select: bool = True
+
+    # Creator-trust render QA. These gates inspect the finished MP4 and fail closed
+    # before automatic distribution when the result is technically unsafe.
+    render_qa_enabled: bool = True
+    render_qa_block_publish: bool = True
+    render_qa_require_audio: bool = True
+    render_qa_min_width: int = 720
+    render_qa_min_height: int = 1280
+    render_qa_max_black_seconds: float = 0.90
+    render_qa_max_black_ratio: float = 0.08
+    render_qa_max_silence_ratio: float = 0.97
+    render_qa_max_focus_speed: float = 0.55
+    render_qa_max_focus_total_motion: float = 2.80
+    render_qa_max_caption_chars: int = 44
+    render_qa_caption_safe_margin: int = 120
 
     # v0.6 publishing queue
     publishing_enabled: bool = True
