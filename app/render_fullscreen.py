@@ -46,8 +46,6 @@ def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Sett
     if mode == "combat":
         strength = min(0.26, strength * 1.18)
 
-    # When RuneLite gives us exact game events, animate around the real payoff
-    # instead of adding arbitrary zoom pulses every few seconds.
     exact_times=[float(x.get("time",0) or 0) for x in keyframes if float(x.get("exact",0) or 0)>=1.0]
     exact_times=[x for x in exact_times if 0.0 <= x <= duration]
     target_time=(min(exact_times,key=lambda x:abs(x-duration*0.58)) if exact_times else duration*0.60)
@@ -108,7 +106,7 @@ def _manual_webcam_crop(source: Path, s: Settings) -> tuple[str, str, float] | N
 
 def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
                       s: Settings, duration: float, game_events: list[dict] | None = None
-                      ) -> tuple[str, str, str, int]:
+                      ) -> tuple[str, str, str, int, dict | None]:
     """Fill the Short with RuneLite-guided gameplay plus only the real configured webcam."""
     rw, rh = int(s.render_width), int(s.render_height)
     mode = _shorts_focus_mode(clip)
@@ -125,13 +123,11 @@ def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
     elif configured_region != "auto":
         webcam = _webcam_crop(source, start, s)
 
-    # The old reaction-only detector assumes one of the four 16:9 corner boxes.
-    # Do not run it against the calibrated manual rectangle.
     if webcam:
         region, _ = webcam
         if region != "manual" and _reaction_only_source(source, start, s, region):
             graph,region_name,render_mode=_reaction_filter(source, start, ass_path, s, webcam)
-            return graph,region_name,render_mode,len(focus_keyframes)
+            return graph,region_name,render_mode,len(focus_keyframes),None
 
     if webcam:
         region, cam_crop = webcam
@@ -140,18 +136,20 @@ def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
         cam_h = min(cam_h, int(rh * 0.30))
         cam_x = (rw - cam_w) // 2
         cam_y = 54
+        border=5
         graph = (
             f"[0:v]split=2[game][cam];"
             f"[game]{game_chain}[game2];"
             f"[cam]{cam_crop},scale={cam_w}:{cam_h}:force_original_aspect_ratio=increase,"
-            f"crop={cam_w}:{cam_h},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.90:t=5[cam2];"
+            f"crop={cam_w}:{cam_h},drawbox=x=0:y=0:w=iw:h=ih:color=white@0.90:t={border}[cam2];"
             f"[game2][cam2]overlay={cam_x}:{cam_y}[stage1];"
             f"[stage1]ass='{ass_path}',setsar=1[v]"
         )
-        return graph, region, "gameplay_fullscreen",len(focus_keyframes)
+        box={"x":cam_x,"y":cam_y,"w":cam_w,"h":cam_h,"border":border}
+        return graph, region, "gameplay_fullscreen",len(focus_keyframes),box
 
     graph = f"[0:v]{game_chain},ass='{ass_path}',setsar=1[v]"
-    return graph, "", "gameplay_fullscreen",len(focus_keyframes)
+    return graph, "", "gameplay_fullscreen",len(focus_keyframes),None
 
 
 def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Settings,
@@ -172,7 +170,7 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
     write_ass(words, start, end, ass, s, hook_text=hook_text)
     ap = _ffmpeg_filter_path(ass)
 
-    fc, webcam_region, render_mode,focus_points = _full_game_filter(
+    fc, webcam_region, render_mode, focus_points, webcam_box = _full_game_filter(
         source,start,clip,ap,s,dur,game_events=game_events
     )
     cmd = [
@@ -200,6 +198,7 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
         "smart_framing_points": focus_points,
         "webcam_region": webcam_region,
         "webcam_position": "top_center" if webcam_region else "",
+        "webcam_box": webcam_box,
         "render_mode": render_mode,
         "resolution": f"{int(s.render_width)}x{int(s.render_height)}",
         "sar": "1:1",
