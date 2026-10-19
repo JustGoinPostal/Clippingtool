@@ -1,4 +1,4 @@
-from app.desktop import run
+from app.desktop import main
 
 if __name__ == "__main__":
-    run()
+    raise SystemExit(main())
