@@ -13,6 +13,7 @@ data/*.db
 !data/input/.gitkeep
 !data/output/.gitkeep
 !data/cache/.gitkeep
+benchmarks/private/
 runelite-companion/build/
 runelite-companion/.gradle/
 runelite-companion/PostalAutoClipCompanion-*-all.jar
