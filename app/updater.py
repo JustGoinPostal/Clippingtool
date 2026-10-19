@@ -25,6 +25,10 @@ STATE_PATH = UPDATE_DIR / "state.json"
 DEFAULT_MANIFEST_URL = "https://github.com/JustGoinPostal/Clippingtool/releases/latest/download/postal-autoclip-update.json"
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def current_version() -> str:
     info = PROGRAM_ROOT / "BUILD_INFO.txt"
     if info.exists():
@@ -81,7 +85,7 @@ def validate_manifest(payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Update installer URL must use HTTPS")
     if len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256):
         raise RuntimeError("Update manifest has an invalid SHA-256")
-    if os.name == "nt" and not signer:
+    if _is_windows() and not signer:
         raise RuntimeError("Windows update manifest is missing the expected Authenticode signer")
     return {
         "schema_version": int(payload.get("schema_version", 1) or 1),
@@ -130,7 +134,7 @@ def _sha256(path: Path) -> str:
 
 
 def authenticode_info(path: Path) -> dict[str, str]:
-    if os.name != "nt":
+    if not _is_windows():
         return {"status": "NotWindows", "subject": ""}
     script = (
         "$s=Get-AuthenticodeSignature -LiteralPath $args[0];"
@@ -153,7 +157,7 @@ def verify_installer(path: Path, expected_sha256: str, expected_subject: str) ->
     if actual.lower() != str(expected_sha256).lower():
         raise RuntimeError("Downloaded update failed SHA-256 verification")
     signature = authenticode_info(path)
-    if os.name == "nt":
+    if _is_windows():
         if signature["status"].lower() != "valid":
             raise RuntimeError(f"Downloaded update has an invalid Authenticode signature: {signature['status']}")
         if expected_subject and expected_subject.lower() not in signature["subject"].lower():
@@ -186,7 +190,7 @@ def download_update(manifest: dict[str, Any]) -> Path:
 
 
 def launch_update(installer: Path, manifest: dict[str, Any]) -> dict[str, Any]:
-    if os.name != "nt":
+    if not _is_windows():
         raise RuntimeError("Automatic install/rollback is currently supported on Windows only")
     manifest = validate_manifest(manifest)
     verify_installer(installer, manifest["sha256"], manifest["signer_subject"])
@@ -214,7 +218,7 @@ def launch_update(installer: Path, manifest: dict[str, Any]) -> dict[str, Any]:
 
 def automatic_update_check_and_prompt() -> None:
     settings = load_settings()
-    if os.name != "nt" or not getattr(sys, "frozen", False) or not bool(getattr(settings, "auto_update_enabled", True)):
+    if not _is_windows() or not getattr(sys, "frozen", False) or not bool(getattr(settings, "auto_update_enabled", True)):
         return
     result = check_for_update(force=False)
     if not result.get("available") or not isinstance(result.get("manifest"), dict):
@@ -236,7 +240,7 @@ def automatic_update_check_and_prompt() -> None:
 
 
 def ctypes_message_box_yes_no(title: str, message: str) -> bool:
-    if os.name != "nt":
+    if not _is_windows():
         return False
     import ctypes
     MB_YESNO = 0x00000004
