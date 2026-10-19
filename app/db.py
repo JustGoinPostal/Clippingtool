@@ -99,12 +99,15 @@ def init_db():
           platform_url TEXT NOT NULL DEFAULT '',
           result_json TEXT NOT NULL DEFAULT '{}',
           published_at REAL NOT NULL DEFAULT 0,
+          next_attempt_at REAL NOT NULL DEFAULT 0,
+          last_attempt_at REAL NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY(clip_id) REFERENCES clips(id),
           FOREIGN KEY(render_id) REFERENCES renders(id)
         );
         CREATE INDEX IF NOT EXISTS idx_publish_due ON publish_queue(status,scheduled_for);
+        CREATE INDEX IF NOT EXISTS idx_publish_retry ON publish_queue(status,next_attempt_at);
         """)
         _ensure_column(c,"clips","event_type","TEXT NOT NULL DEFAULT 'speech'")
         _ensure_column(c,"clips","features_json","TEXT NOT NULL DEFAULT '{}'")
@@ -115,6 +118,9 @@ def init_db():
         _ensure_column(c,"renders","quality_score","REAL NOT NULL DEFAULT 0")
         _ensure_column(c,"renders","quality_json","TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(c,"renders","is_best","INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(c,"publish_queue","next_attempt_at","REAL NOT NULL DEFAULT 0")
+        _ensure_column(c,"publish_queue","last_attempt_at","REAL NOT NULL DEFAULT 0")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_publish_retry ON publish_queue(status,next_attempt_at)")
         c.commit()
 
 def q(sql: str, args=(), one=False):
@@ -219,7 +225,7 @@ def add_publish_job(clip_id: int, render_id: int, platform: str, scheduled_for: 
 
 def update_publish_job(job_id: int, **fields):
     allowed={"scheduled_for","status","title","caption","hashtags","privacy","options_json","attempts","error",
-             "platform_post_id","platform_url","result_json","published_at"}
+             "platform_post_id","platform_url","result_json","published_at","next_attempt_at","last_attempt_at"}
     sets=[]; vals=[]
     for key,value in fields.items():
         if key not in allowed: continue
