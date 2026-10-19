@@ -13,7 +13,7 @@ def test_fullscreen_gameplay_uses_entire_vertical_frame(monkeypatch):
     assert "scale=1080:1920" in graph
     assert "gblur" not in graph
     assert "overlay=" not in graph
-    assert "(iw-ow)*0.62" in graph
+    assert "x='(iw-ow)/2'" in graph
 
 
 def test_fullscreen_gameplay_puts_webcam_top_center(monkeypatch):
@@ -36,8 +36,12 @@ def test_reward_and_chat_signals_never_frame_osrs_chat():
     assert render_fullscreen._shorts_focus_mode({"event_type": "speech", "features_json": '{"chat_change": 1.0}'}) == "center"
 
 
-def test_gameplay_crop_happens_before_dynamic_motion():
+def test_gameplay_crop_happens_before_dynamic_zoom_and_stays_centered():
     s = Settings(layout="osrs_focus", dynamic_zoom_enabled=True)
     chain = render_fullscreen._gameplay_chain("center", 1080, 1920, 22.0, s)
     assert chain.index("crop=") < chain.index("zoompan")
-    assert "x='(iw-ow)*0.62'" in chain
+    assert "x='(iw-ow)/2'" in chain
+    assert "x='iw/2-(iw/zoom/2)'" in chain
+    assert "y='ih/2-(ih/zoom/2)'" in chain
+    assert "sin(on/65)" not in chain
+    assert "cos(on/80)" not in chain
