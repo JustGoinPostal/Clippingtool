@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .captions import write_ass
 from .config import Settings
-from .framing import build_focus_keyframes, crop_x_expression
+from .framing import build_focus_keyframes, crop_x_expression, zoompan_y_expression
 from .media import require_ffmpeg
 from .render import (
     _ffmpeg_filter_path,
@@ -45,12 +45,19 @@ def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Sett
     strength = max(0.0, min(0.24, float(s.dynamic_zoom_strength)))
     if mode == "combat":
         strength = min(0.26, strength * 1.18)
+
+    # When RuneLite gives us exact game events, animate around the real payoff
+    # instead of adding arbitrary zoom pulses every few seconds.
+    exact_times=[float(x.get("time",0) or 0) for x in keyframes if float(x.get("exact",0) or 0)>=1.0]
+    exact_times=[x for x in exact_times if 0.0 <= x <= duration]
+    target_time=(min(exact_times,key=lambda x:abs(x-duration*0.58)) if exact_times else duration*0.60)
+
     interval = max(3.5, float(s.dynamic_beat_interval_seconds))
     beat = max(0.7, min(float(s.dynamic_beat_seconds), interval * 0.45))
     interval_f = max(2, int(round(interval * fps)))
     beat_f = max(1, int(round(beat * fps)))
-    pulse = max(0.022, min(0.055, strength * 0.24))
-    payoff_mid = int(round(duration * 0.60 * fps))
+    pulse = 0.0 if exact_times else max(0.022, min(0.055, strength * 0.24))
+    payoff_mid = int(round(target_time * fps))
     payoff_half = max(1, int(round(min(float(s.dynamic_zoom_seconds), duration * 0.45) * fps / 2)))
     payoff_start = max(0, payoff_mid - payoff_half)
     payoff_end = max(payoff_start + 1, payoff_mid + payoff_half)
@@ -58,15 +65,14 @@ def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Sett
     beat_expr = (
         f"if(lt(mod(on,{interval_f}),{beat_f}),"
         f"sin(PI*mod(on,{interval_f})/{beat_f}),0)"
-    )
+    ) if pulse > 0 else "0"
     payoff_expr = (
         f"if(between(on,{payoff_start},{payoff_end}),"
         f"max(0,1-abs(on-{payoff_mid})/{payoff_half}),0)"
     )
     z = f"min(1.28,1+{pulse:.4f}*({beat_expr})+{strength:.4f}*({payoff_expr}))"
-    # Zoom motion stays centered inside the already RuneLite-guided crop.
     x = "iw/2-(iw/zoom/2)"
-    y = "ih/2-(ih/zoom/2)"
+    y = zoompan_y_expression(keyframes,fps) if keyframes else "ih/2-(ih/zoom/2)"
     return (
         base
         + f",fps=30,zoompan=z='{z}':x='{x}':y='{y}':"
