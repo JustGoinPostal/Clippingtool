@@ -50,8 +50,15 @@ class Settings(BaseModel):
 
     # Keep a visible facecam in vertical edits without using it for clip scoring.
     webcam_overlay_enabled: bool = True
-    webcam_region: str = "auto"  # auto, top_left, top_right, bottom_left, bottom_right
+    webcam_region: str = "auto"  # auto/manual or an explicit source corner
     webcam_crop_width_ratio: float = 0.30
+    # Postal's OBS camera rectangle measured from the full source frame. These are
+    # normalized coordinates so the crop stays correct at 1280x720, 1920x1080, etc.
+    webcam_manual_enabled: bool = True
+    webcam_manual_x_ratio: float = 0.720
+    webcam_manual_y_ratio: float = 0.000
+    webcam_manual_width_ratio: float = 0.280
+    webcam_manual_height_ratio: float = 0.340
     webcam_overlay_width: int = 390
     webcam_overlay_y: int = 500
 
