@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from .config import Settings
+from .osrs_context import enrich_encounter_context
 from .osrs_events import normalize_event_type, summarize_event
 from .osrs_story import build_story_events, story_window
 
@@ -93,11 +94,17 @@ def _decorate(candidate: dict[str, Any], story: dict[str, Any], segments: list[d
         features["inferred_story"] = 1.0
     if bool(payload.get("smite_signal")):
         features["smite_signal"] = 1.0
+    if payload.get("activity_key"):
+        features["encounter_context"] = 1.0
     if float(payload.get("loot_value", payload.get("total_value", 0)) or 0) >= 20_000_000:
         features["high_value"] = 1.0
     out["features"] = features
     reason = str(out.get("reason") or "").strip("; ")
     story_reason = f"OSRS story: {archetype.replace('_', ' ')}"
+    if payload.get("encounter"):
+        story_reason += f" at {payload['encounter']}"
+    elif payload.get("activity"):
+        story_reason += f" in {payload['activity']}"
     out["reason"] = f"{reason}; {story_reason}" if reason else story_reason
     return out
 
@@ -110,7 +117,8 @@ def apply_story_intelligence(
     s: Settings,
 ) -> list[dict[str, Any]]:
     """Promote exact/inferred OSRS story arcs without crushing personality-only clips."""
-    stories = build_story_events(game_events)
+    enriched_events=enrich_encounter_context(game_events)
+    stories = build_story_events(enriched_events)
     if not stories:
         return candidates
     segments = list(transcript.get("segments") or [])
