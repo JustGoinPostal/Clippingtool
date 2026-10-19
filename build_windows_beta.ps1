@@ -47,6 +47,7 @@ $pyi = @(
   '.\desktop_entry.py'
 )
 python -m PyInstaller @pyi
+if ($LASTEXITCODE -ne 0) { throw "PostalAutoClip PyInstaller build failed with exit code $LASTEXITCODE" }
 
 $updaterPyi = @(
   '--noconfirm', '--clean', '--onefile', '--windowed',
@@ -60,6 +61,7 @@ $updaterPyi = @(
   '.\updater_entry.py'
 )
 python -m PyInstaller @updaterPyi
+if ($LASTEXITCODE -ne 0) { throw "PostalAutoClipUpdater PyInstaller build failed with exit code $LASTEXITCODE" }
 Copy-Item '.\dist\Updater\PostalAutoClipUpdater.exe' '.\dist\PostalAutoClip\PostalAutoClipUpdater.exe' -Force
 
 $rl = Get-ChildItem '.\runelite-companion\build\libs\PostalAutoClipCompanion-*-all.jar' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -95,12 +97,22 @@ if (-not $iscc) {
 if (-not $iscc) { throw 'Inno Setup compiler (ISCC.exe) was not found.' }
 
 New-Item -ItemType Directory -Force '.\installer\output' | Out-Null
-& $iscc.Source "/DAppVersion=$Version" '.\installer\PostalAutoClip.iss'
+$compileArgs = @("/DAppVersion=$Version")
+if ($requireSigning) {
+  $bridge = (Resolve-Path '.\scripts\inno_sign_file.ps1').Path
+  # Keep certificate/password out of the compiler command line. Inno receives a
+  # fixed bridge command; the bridge reads protected CI/release environment vars.
+  $innoSignCommand = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $q' + $bridge + '$q $f'
+  $compileArgs += '/DSignInstaller'
+  $compileArgs += "--signtool=PostalSign=$innoSignCommand"
+}
+$compileArgs += '.\installer\PostalAutoClip.iss'
+& $iscc.Source @compileArgs
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup compiler failed with exit code $LASTEXITCODE" }
 $installer = (Resolve-Path '.\installer\output\PostalAutoClip-Beta-Setup.exe').Path
 
-& '.\scripts\sign_windows.ps1' -Files @($installer) -RequireSigning:$requireSigning
-
+# In signed builds Inno signs Setup plus the generated uninstaller through the
+# configured SignTool. Unsigned local developer builds remain supported.
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
 $signature = Get-AuthenticodeSignature -LiteralPath $installer
 $subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' }
