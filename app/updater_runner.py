@@ -76,7 +76,7 @@ def _prune_rollbacks(root: Path, keep: int = 3) -> None:
 
 def apply_update(installer: Path, program_dir: Path, app_exe_name: str, parent_pid: int,
                  old_version: str, new_version: str, expected_sha256: str,
-                 signer_subject: str, signer_thumbprint: str) -> int:
+                 signer_subject: str, signer_thumbprint: str, relaunch: bool = True) -> int:
     from .paths import APP_HOME
     from .updater import verify_installer
 
@@ -91,13 +91,16 @@ def apply_update(installer: Path, program_dir: Path, app_exe_name: str, parent_p
         if not app_exe.exists(): raise RuntimeError("Installer completed but PostalAutoClip.exe is missing")
         status["status"] = "health_check"; _run_self_test(app_exe)
         status["status"] = "updated"; status["completed_at"] = time.time(); log_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
-        _prune_rollbacks(rollback_root, keep=3); _launch(app_exe); return 0
+        _prune_rollbacks(rollback_root, keep=3)
+        if relaunch: _launch(app_exe)
+        return 0
     except Exception as exc:
         status["error"] = f"{type(exc).__name__}: {exc}"; status["status"] = "rolling_back"
         try:
             backup_path = Path(str(status.get("backup") or ""))
             if backup_path.exists():
-                restore_program(backup_path, program_dir); old_exe = program_dir / app_exe_name; _run_self_test(old_exe); status["status"] = "rolled_back"; _launch(old_exe)
+                restore_program(backup_path, program_dir); old_exe = program_dir / app_exe_name; _run_self_test(old_exe); status["status"] = "rolled_back"
+                if relaunch: _launch(old_exe)
             else: status["status"] = "rollback_unavailable"
         except Exception as rollback_exc:
             status["rollback_error"] = f"{type(rollback_exc).__name__}: {rollback_exc}"; status["status"] = "rollback_failed"
@@ -113,8 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app-exe", default="PostalAutoClip.exe"); parser.add_argument("--parent-pid", type=int, default=0)
     parser.add_argument("--old-version", default="unknown"); parser.add_argument("--new-version", required=True)
     parser.add_argument("--sha256", required=True); parser.add_argument("--signer-subject", required=True); parser.add_argument("--signer-thumbprint", required=True)
+    parser.add_argument("--no-relaunch", action="store_true", help="Do not launch AutoClip after success/rollback (CI lifecycle validation only)")
     args = parser.parse_args(argv)
-    return apply_update(args.apply, args.program_dir, args.app_exe, args.parent_pid, args.old_version, args.new_version, args.sha256, args.signer_subject, args.signer_thumbprint)
+    return apply_update(args.apply, args.program_dir, args.app_exe, args.parent_pid, args.old_version, args.new_version, args.sha256, args.signer_subject, args.signer_thumbprint, relaunch=not args.no_relaunch)
 
 
 if __name__ == "__main__":
