@@ -143,6 +143,17 @@ jobs:
           if ($manifest.signer_thumbprint.ToUpperInvariant() -ne $expectedThumb) { throw 'Update manifest thumbprint does not match the signed application trust anchor.' }
           if ($manifest.signer_subject -ne $expectedSubject) { throw 'Update manifest subject does not match the signed application trust anchor.' }
 
+      - name: Upload PR beta installer
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PostalAutoClip-Windows-Beta-PR-${{ github.event.pull_request.number }}
+          path: |
+            installer/output/PostalAutoClip-Beta-Setup.exe
+            installer/output/postal-autoclip-update.json
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Upload manual beta installer
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
