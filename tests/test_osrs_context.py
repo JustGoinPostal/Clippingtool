@@ -1,4 +1,5 @@
 from app.config import Settings
+from app.metadata import make_metadata
 from app.osrs_context import context_from_text, enrich_encounter_context
 from app.osrs_story_apply import apply_story_intelligence
 
@@ -32,7 +33,7 @@ def test_explicit_reward_context_overrides_old_target_context():
     assert reward["payload"]["activity"]=="Chambers of Xeric"
 
 
-def test_story_clip_persists_encounter_context():
+def test_story_clip_persists_encounter_context_and_packages_it():
     s=Settings(max_candidates=10)
     candidates=[{"start":90.0,"end":125.0,"score":74.0,"base_score":74.0,"reason":"combat","transcript":"","event_type":"gameplay","features":{}}]
     events=[
@@ -47,3 +48,7 @@ def test_story_clip_persists_encounter_context():
     assert boss["event_context"]["encounter"]=="Great Olm"
     assert boss["features"]["encounter_context"]==1.0
     assert "Great Olm" in boss["reason"]
+    title,_,tags=make_metadata(boss)
+    assert "Great Olm" in title
+    assert "#ChambersOfXeric" in tags
+    assert "#OSRSRaids" in tags
