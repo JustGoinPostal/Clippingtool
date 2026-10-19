@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -74,8 +73,11 @@ def _run_installer(installer: Path) -> None:
     cp = subprocess.run([
         str(Path(installer).resolve()), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"
     ], timeout=300)
-    if cp.returncode not in {0, 5}:
-        raise RuntimeError(f"Installer returned exit code {cp.returncode}")
+    # Inno Setup documents every non-zero setup exit code as not having run to
+    # completion. In particular, code 5 is user/Abort cancellation and must never
+    # be accepted as an update success.
+    if cp.returncode != 0:
+        raise RuntimeError(f"Installer did not complete successfully (Inno Setup exit code {cp.returncode})")
 
 
 def _run_self_test(app_exe: Path) -> None:
@@ -111,12 +113,8 @@ def apply_update(installer: Path, program_dir: Path, app_exe_name: str, parent_p
     updates.mkdir(parents=True, exist_ok=True)
 
     status = {
-        "started_at": time.time(),
-        "old_version": old_version,
-        "new_version": new_version,
-        "program_dir": str(program_dir),
-        "installer": str(installer),
-        "status": "starting",
+        "started_at": time.time(), "old_version": old_version, "new_version": new_version,
+        "program_dir": str(program_dir), "installer": str(installer), "status": "starting",
     }
     try:
         verify_installer(installer, expected_sha256, signer_subject)
@@ -130,15 +128,13 @@ def apply_update(installer: Path, program_dir: Path, app_exe_name: str, parent_p
             raise RuntimeError("Installer completed but PostalAutoClip.exe is missing")
         status["status"] = "health_check"
         _run_self_test(app_exe)
-        status["status"] = "updated"
-        status["completed_at"] = time.time()
+        status["status"] = "updated"; status["completed_at"] = time.time()
         log_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
         _prune_rollbacks(rollback_root, keep=3)
         _launch(app_exe)
         return 0
     except Exception as exc:
-        status["error"] = f"{type(exc).__name__}: {exc}"
-        status["status"] = "rolling_back"
+        status["error"] = f"{type(exc).__name__}: {exc}"; status["status"] = "rolling_back"
         try:
             backup_path = Path(str(status.get("backup") or ""))
             if backup_path.exists():
@@ -150,13 +146,10 @@ def apply_update(installer: Path, program_dir: Path, app_exe_name: str, parent_p
             else:
                 status["status"] = "rollback_unavailable"
         except Exception as rollback_exc:
-            status["rollback_error"] = f"{type(rollback_exc).__name__}: {rollback_exc}"
-            status["status"] = "rollback_failed"
+            status["rollback_error"] = f"{type(rollback_exc).__name__}: {rollback_exc}"; status["status"] = "rollback_failed"
         status["completed_at"] = time.time()
-        try:
-            log_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        try: log_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
+        except Exception: pass
         return 1
 
 
