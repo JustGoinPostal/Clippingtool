@@ -101,6 +101,9 @@ class Settings(BaseModel):
     render_qa_min_mean_volume_db: float = -40.0
     render_qa_loud_mean_volume_db: float = -8.0
     render_qa_peak_warning_db: float = -0.10
+    render_qa_saturation_warning_ratio: float = 0.0001
+    render_qa_saturation_block_ratio: float = 0.005
+    render_qa_saturation_block_run_samples: int = 256
     render_qa_max_av_start_offset_seconds: float = 0.45
     render_qa_max_av_duration_delta_seconds: float = 0.90
     render_qa_webcam_border_min_luma: float = 150.0
