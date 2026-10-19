@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from .audio_qa import pcm_saturation_stats
 from .config import Settings
 from .framing import build_focus_keyframes
 from .media import probe, require_ffmpeg
@@ -409,6 +410,18 @@ def evaluate_render_qa(
                     warnings.append(f"audio peak reaches {float(peak_db):.2f} dBFS; inspect for clipping")
         except Exception as e:
             blockers.append(f"loudness QA failed: {type(e).__name__}: {e}")
+        try:
+            saturation=pcm_saturation_stats(path,actual_duration); checks["audio_saturation"]=saturation
+            hard_ratio=float(saturation.get("hard_fullscale_ratio",0) or 0)
+            longest=int(saturation.get("longest_hard_run",0) or 0)
+            if hard_ratio >= float(s.render_qa_saturation_block_ratio) or longest >= int(s.render_qa_saturation_block_run_samples):
+                blockers.append(
+                    f"audio has sustained full-scale saturation ({hard_ratio*100:.3f}% hard samples, longest run {longest})"
+                )
+            elif hard_ratio >= float(s.render_qa_saturation_warning_ratio):
+                warnings.append(f"audio contains full-scale saturation samples ({hard_ratio*100:.4f}%); inspect loud reactions")
+        except Exception as e:
+            blockers.append(f"PCM saturation QA failed: {type(e).__name__}: {e}")
 
     start=float(render_result.get("start",0) or 0); end=float(render_result.get("end",0) or 0)
     captions=_caption_metrics(words,start,end,s,str(clip.get("hook_text") or "")); checks["captions"]=captions
