@@ -23,8 +23,6 @@ def _default_app_home() -> Path:
     override = os.getenv("POSTAL_AUTOCLIP_HOME", "").strip()
     if override:
         return Path(override).expanduser().resolve()
-    # Keep test runs out of a developer's real profile even when the caller did
-    # not set POSTAL_AUTOCLIP_HOME explicitly.
     if "pytest" in sys.modules:
         return (RESOURCE_ROOT / ".pytest-home").resolve()
     if os.name == "nt":
@@ -67,8 +65,6 @@ def _legacy_config_payload(source_root: Path) -> dict[str, Any] | None:
         return None
     if not isinstance(payload, dict):
         return None
-    # Preserve existing recording/render locations without copying large media.
-    # Cache is intentionally moved to AppData because it is disposable.
     for key in ("watch_folder", "output_folder"):
         raw = str(payload.get(key) or "").strip()
         if not raw:
@@ -81,16 +77,47 @@ def _legacy_config_payload(source_root: Path) -> dict[str, Any] | None:
     return payload
 
 
+def _protect_secret_json_files() -> list[str]:
+    """Immediately DPAPI-wrap migrated/legacy secret JSON on Windows.
+
+    This closes the migration window where an old plaintext credential could
+    otherwise sit in the new AppData secrets directory until that platform was
+    next opened. Non-Windows development leaves the restricted-file fallback.
+    """
+    if os.name != "nt" or not SECRETS_DIR.exists():
+        return []
+    protected: list[str] = []
+    try:
+        from .secure_store import read_secure_json
+    except Exception:
+        return protected
+    for path in SECRETS_DIR.glob("*.json"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            if '"__postal_secure__"' in raw:
+                continue
+            value = read_secure_json(path, migrate_legacy=True)
+            if isinstance(value, dict):
+                protected.append(path.name)
+        except Exception:
+            # A malformed credential should be surfaced by the account flow; do
+            # not destroy it during startup migration.
+            continue
+    return protected
+
+
 def migrate_legacy_install(source_root: Path = RESOURCE_ROOT) -> dict[str, Any]:
     """Copy small creator state from the old repo-folder layout into AppData.
 
     Large recordings/renders are never copied. Relative legacy media paths are
-    converted to absolute paths so existing jobs continue to resolve.
-    Existing AppData files always win; migration is non-destructive.
+    converted to absolute paths so existing jobs continue to resolve. Existing
+    AppData files always win; migration is non-destructive. On Windows, migrated
+    credential JSON is DPAPI-protected before normal startup continues.
     """
     report: dict[str, Any] = {"source": str(source_root), "migrated": []}
     try:
         if source_root.resolve() == APP_HOME.resolve():
+            _protect_secret_json_files()
             return report
     except Exception:
         pass
@@ -114,6 +141,9 @@ def migrate_legacy_install(source_root: Path = RESOURCE_ROOT) -> dict[str, Any]:
             if src.is_file() and _copy_if_missing(src, SECRETS_DIR / src.name):
                 report["migrated"].append(f"secret:{src.name}")
 
+    protected = _protect_secret_json_files()
+    report["migrated"].extend(f"dpapi:{name}" for name in protected)
+
     for relative in (
         Path("data/public_reference_catalog.json"),
         Path("data/benchmark_labels"),
@@ -131,12 +161,6 @@ def migrate_legacy_install(source_root: Path = RESOURCE_ROOT) -> dict[str, Any]:
 
 
 def _sync_runtime_resources() -> None:
-    """Mirror small immutable UI/reference resources into the runtime home.
-
-    Existing modules historically resolve resources through config.ROOT. Keeping
-    a small synchronized copy in AppData lets the installed executable remain
-    replaceable while all mutable state lives outside the program directory.
-    """
     static_src = RESOURCE_ROOT / "app" / "static"
     static_dst = APP_HOME / "app" / "static"
     if static_src.exists() and static_src.resolve() != static_dst.resolve():
@@ -181,6 +205,7 @@ def ensure_app_home() -> Path:
     ):
         path.mkdir(parents=True, exist_ok=True)
     migrate_legacy_install()
+    _protect_secret_json_files()
     _sync_runtime_resources()
     configure_process_environment()
     return APP_HOME
