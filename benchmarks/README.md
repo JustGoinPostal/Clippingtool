@@ -22,9 +22,40 @@ A release-quality corpus should deliberately include both wins and boring/false-
 - Personality: funny/reaction moments that have no RuneLite payoff event.
 - Negative sections: bankstanding, ordinary skilling, travel, AFK/silence, repetitive chat and harmless visual spikes.
 
-## 1. Label an owned VOD
+## 1. Label an owned VOD with Golden VOD Lab
 
-Keep labels in a private/untracked directory such as `benchmarks/private/`. A labels file can be a list or an object containing `labels`:
+After installing Postal AutoClip, launch the local labeler:
+
+```powershell
+postal-autoclip-labeler
+```
+
+or directly:
+
+```powershell
+python -m app.benchmark_labeler
+```
+
+Open `http://127.0.0.1:8792/` on the same PC. The labeler lists processed AutoClip jobs and streams the original local recording without uploading it anywhere.
+
+Golden VOD Lab provides:
+
+- VOD playback with S/E shortcuts for exact start/end boundaries.
+- OSRS event-type and importance-weight labeling.
+- Atomic local autosave under `data/benchmark_labels/`.
+- One-click export of private labels, benchmark case, and corpus manifest entry.
+- A deliberately separate **Reveal AutoClip candidates** action.
+- Held-out export protection: once the labeling session is assisted by model predictions, the UI/backend will not certify it as blind held-out ground truth.
+
+For a genuine held-out session, label the VOD first. Do not reveal AutoClip candidates until after exporting the blind held-out case. This avoids letting the model's current mistakes influence the human ground truth.
+
+`weight` expresses creator importance, not expected views. A pet, huge PK or raid unique can carry more weight than an ordinary but still clip-worthy moment.
+
+Private label drafts live under `data/benchmark_labels/`; exported cases/manifests live under `benchmarks/private/`. Both are Git-ignored.
+
+## 2. CLI workflow for automation or bulk labeling
+
+Manual JSON remains supported when useful. A labels file can be a list or an object containing `labels`:
 
 ```json
 {
@@ -47,11 +78,7 @@ Keep labels in a private/untracked directory such as `benchmarks/private/`. A la
 }
 ```
 
-`weight` expresses creator importance, not expected views. A pet, huge PK or raid unique can carry more weight than an ordinary but still clip-worthy moment.
-
-## 2. Process the VOD normally, then export predictions
-
-After AutoClip finishes the recording, use its job id:
+After AutoClip finishes the recording, export its predictions by job id:
 
 ```powershell
 python -m app.benchmark_export --job-id 12 `
@@ -61,9 +88,9 @@ python -m app.benchmark_export --job-id 12 `
 
 The exported case contains label windows and clip prediction metadata only. It intentionally omits source paths, VOD bytes and transcripts so benchmark artifacts do not become a privacy leak.
 
-## 3. Add the case to the private corpus manifest
+## 3. Private corpus manifest
 
-Copy `corpus.example.json` to an untracked `benchmarks/private/corpus.json` and point each session at its case file. Every session must have a unique id and a split of `tuning` or `heldout`.
+Golden VOD Lab maintains `benchmarks/private/corpus.json` automatically when exporting. For CLI-only use, copy `corpus.example.json` to that private path and point each session at its case file. Every session must have a unique id and a split of `tuning` or `heldout`.
 
 Do not move held-out sessions into tuning just because a change misses them. A miss is evidence that the product needs work.
 
@@ -105,7 +132,7 @@ The detector must be judged by all of them. Maximizing recall by producing hundr
 
 ## Release discipline
 
-1. Label moments before tuning against that recording when practical.
+1. Label held-out moments blind before revealing AutoClip predictions.
 2. Keep held-out sessions out of day-to-day tuning decisions.
 3. Do not commit private VODs, transcripts, local paths or creator-private benchmark cases.
 4. Compare every meaningful detection/boundary change against the same corpus.
