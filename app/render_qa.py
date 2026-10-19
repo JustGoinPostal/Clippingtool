@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import statistics
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,13 @@ from .media import probe, require_ffmpeg
 _BLACK_RE = re.compile(r"black_start:(?P<start>[0-9.]+).*?black_end:(?P<end>[0-9.]+).*?black_duration:(?P<dur>[0-9.]+)")
 _SILENCE_START_RE = re.compile(r"silence_start:\s*(?P<t>[0-9.]+)")
 _SILENCE_END_RE = re.compile(r"silence_end:\s*(?P<end>[0-9.]+)\s*\|\s*silence_duration:\s*(?P<dur>[0-9.]+)")
+_FREEZE_START_RE = re.compile(r"freeze_start:\s*(?P<t>[0-9.]+)")
+_FREEZE_END_RE = re.compile(r"freeze_end:\s*(?P<t>[0-9.]+)")
+_FREEZE_DURATION_RE = re.compile(r"freeze_duration:\s*(?P<d>[0-9.]+)")
+_MEAN_VOLUME_RE = re.compile(r"mean_volume:\s*(?P<v>-?(?:[0-9.]+|inf))\s*dB", re.I)
+_MAX_VOLUME_RE = re.compile(r"max_volume:\s*(?P<v>-?(?:[0-9.]+|inf))\s*dB", re.I)
+_CROP_RE = re.compile(r"crop=(?P<w>\d+):(?P<h>\d+):(?P<x>\d+):(?P<y>\d+)")
+_YAVG_RE = re.compile(r"lavfi\.signalstats\.YAVG=(?P<v>[0-9.]+)")
 
 
 def parse_blackdetect(text: str) -> dict[str, Any]:
@@ -35,7 +43,6 @@ def parse_silencedetect(text: str, duration: float) -> dict[str, Any]:
         start=max(0.0,end-dur)
         rows.append({"start":round(start,3),"end":round(end,3),"duration":round(dur,3)})
         used+=1
-    # FFmpeg omits silence_end when a file ends while still silent.
     if len(starts)>used and duration>0:
         start=starts[-1]
         if start < duration:
@@ -46,6 +53,72 @@ def parse_silencedetect(text: str, duration: float) -> dict[str, Any]:
         "total_seconds":round(total,3),
         "max_seconds":round(max([x["duration"] for x in rows] or [0.0]),3),
         "ratio":round(min(1.0,total/max(0.001,duration)),4) if duration>0 else 0.0,
+    }
+
+
+def parse_freezedetect(text: str, duration: float) -> dict[str,Any]:
+    rows=[]; start=None; pending_duration=None
+    for line in (text or "").splitlines():
+        sm=_FREEZE_START_RE.search(line)
+        if sm:
+            start=float(sm.group("t")); pending_duration=None
+        dm=_FREEZE_DURATION_RE.search(line)
+        if dm:
+            pending_duration=float(dm.group("d"))
+        em=_FREEZE_END_RE.search(line)
+        if em and start is not None:
+            end=float(em.group("t")); dur=pending_duration if pending_duration is not None else max(0.0,end-start)
+            rows.append({"start":round(start,3),"end":round(end,3),"duration":round(dur,3)})
+            start=None; pending_duration=None
+    if start is not None and duration>start:
+        end=float(duration); dur=max(0.0,end-start)
+        rows.append({"start":round(start,3),"end":round(end,3),"duration":round(dur,3)})
+    total=sum(x["duration"] for x in rows)
+    return {
+        "segments":rows,
+        "total_seconds":round(total,3),
+        "max_seconds":round(max([x["duration"] for x in rows] or [0.0]),3),
+        "ratio":round(min(1.0,total/max(0.001,duration)),4) if duration>0 else 0.0,
+    }
+
+
+def _db_value(raw: str | None) -> float | None:
+    if raw is None: return None
+    try:
+        value=float(raw)
+        return value if math.isfinite(value) else None
+    except Exception:
+        return None
+
+
+def parse_volumedetect(text: str) -> dict[str,Any]:
+    mean=_MEAN_VOLUME_RE.findall(text or "")
+    peak=_MAX_VOLUME_RE.findall(text or "")
+    return {
+        "mean_db":_db_value(mean[-1]) if mean else None,
+        "max_db":_db_value(peak[-1]) if peak else None,
+    }
+
+
+def parse_cropdetect(text: str) -> list[dict[str,int]]:
+    rows=[]; seen=set()
+    for m in _CROP_RE.finditer(text or ""):
+        row={k:int(m.group(k)) for k in ("w","h","x","y")}
+        key=(row["w"],row["h"],row["x"],row["y"])
+        if row["w"]<8 or row["h"]<8 or key in seen: continue
+        seen.add(key); rows.append(row)
+    return rows
+
+
+def parse_signalstats_luma(text: str) -> dict[str,Any]:
+    vals=[float(m.group("v")) for m in _YAVG_RE.finditer(text or "")]
+    if not vals: return {"samples":0,"mean":None,"median":None,"min":None,"max":None}
+    return {
+        "samples":len(vals),
+        "mean":round(sum(vals)/len(vals),3),
+        "median":round(float(statistics.median(vals)),3),
+        "min":round(min(vals),3),
+        "max":round(max(vals),3),
     }
 
 
@@ -63,9 +136,55 @@ def _black_stats(path: Path, duration: float) -> dict[str,Any]:
     return out
 
 
+def _freeze_stats(path: Path, duration: float) -> dict[str,Any]:
+    text=_run_ffmpeg(path,["-vf","freezedetect=n=-55dB:d=1.25","-an"],max(45.0,duration*2.0+20.0))
+    return parse_freezedetect(text,duration)
+
+
 def _silence_stats(path: Path, duration: float) -> dict[str,Any]:
     text=_run_ffmpeg(path,["-vn","-af","silencedetect=noise=-50dB:d=1.25"],max(45.0,duration*2.0+20.0))
     return parse_silencedetect(text,duration)
+
+
+def _audio_level_stats(path: Path, duration: float) -> dict[str,Any]:
+    text=_run_ffmpeg(path,["-vn","-af","volumedetect"],max(45.0,duration*2.0+20.0))
+    return parse_volumedetect(text)
+
+
+def _filter_filename(path: Path) -> str:
+    value=str(path).replace("\\","/")
+    return value.replace("\\","\\\\").replace(":","\\:").replace("'","\\'")
+
+
+def _caption_pixel_bounds(path: Path, width: int, height: int, duration: float) -> dict[str,Any]:
+    ass=path.with_suffix(".ass")
+    if not ass.exists():
+        return {"available":False,"boxes":[],"upper":[],"lower":[]}
+    require_ffmpeg()
+    d=max(0.8,min(65.0,float(duration)))
+    filt=f"ass='{_filter_filename(ass)}',cropdetect=limit=0.015:round=2:reset=1"
+    cmd=["ffmpeg","-hide_banner","-nostats","-v","info","-f","lavfi","-i",
+         f"color=c=black:s={int(width)}x{int(height)}:r=4:d={d:.3f}","-vf",filt,"-an","-f","null","-"]
+    result=subprocess.run(cmd,capture_output=True,text=True,encoding="utf-8",errors="replace",
+                          timeout=max(45.0,d*1.5+20.0),check=False)
+    boxes=parse_cropdetect((result.stderr or "")+"\n"+(result.stdout or ""))
+    upper=[x for x in boxes if x["y"]+x["h"]/2 < height/2]
+    lower=[x for x in boxes if x["y"]+x["h"]/2 >= height/2]
+    return {"available":True,"boxes":boxes,"upper":upper,"lower":lower}
+
+
+def _region_luma_stats(path: Path, box: dict[str,int], duration: float, *, border_only: bool=False) -> dict[str,Any]:
+    x=max(0,int(box.get("x",0))); y=max(0,int(box.get("y",0)))
+    w=max(2,int(box.get("w",0))); h=max(2,int(box.get("h",0))); border=max(1,int(box.get("border",5)))
+    if border_only:
+        x+=2; y+=1; w=max(2,w-4); h=max(2,min(border,h-1))
+    else:
+        pad=min(max(border+3,6),max(6,min(w,h)//4))
+        x+=pad; y+=pad; w=max(2,w-pad*2); h=max(2,h-pad*2)
+    sample=max(0.8,min(6.0,float(duration)))
+    filt=f"fps=2,crop={w}:{h}:{x}:{y},signalstats,metadata=print:key=lavfi.signalstats.YAVG"
+    text=_run_ffmpeg(path,["-t",f"{sample:.3f}","-vf",filt,"-an"],max(45.0,sample*5.0+20.0))
+    return parse_signalstats_luma(text)
 
 
 def _caption_metrics(words: list[dict], start: float, end: float, s: Settings, hook_text: str) -> dict[str,Any]:
@@ -112,6 +231,28 @@ def _stream_summary(payload: dict[str,Any]) -> tuple[dict[str,Any]|None,list[dic
     return video,audios,duration
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        out=float(value)
+        return out if math.isfinite(out) else None
+    except Exception:
+        return None
+
+
+def _stream_timing(video: dict[str,Any] | None, audios: list[dict[str,Any]]) -> dict[str,Any]:
+    if not video or not audios:
+        return {"available":False}
+    audio=audios[0]
+    vs=_safe_float(video.get("start_time")); a_s=_safe_float(audio.get("start_time"))
+    vd=_safe_float(video.get("duration")); ad=_safe_float(audio.get("duration"))
+    out={"available":bool(vs is not None or vd is not None or a_s is not None or ad is not None)}
+    if vs is not None and a_s is not None: out["start_offset_seconds"]=round(abs(a_s-vs),4)
+    if vd is not None and ad is not None: out["duration_delta_seconds"]=round(abs(ad-vd),4)
+    try: out["audio_sample_rate"]=int(audio.get("sample_rate") or 0)
+    except Exception: out["audio_sample_rate"]=0
+    return out
+
+
 def evaluate_render_qa(
     path: Path,
     clip: dict,
@@ -120,7 +261,7 @@ def evaluate_render_qa(
     s: Settings,
     game_events: list[dict] | None = None,
 ) -> dict[str,Any]:
-    """Inspect the actual encoded Short and fail closed on technical defects."""
+    """Inspect the actual encoded Short and fail closed on creator-visible defects."""
     if not bool(s.render_qa_enabled):
         return {"status":"pass","passed":True,"skipped":True,"blockers":[],"warnings":[],"checks":{}}
 
@@ -135,7 +276,7 @@ def evaluate_render_qa(
     except Exception as e:
         blockers.append(f"could not stat render: {type(e).__name__}")
 
-    video=None; audios=[]; actual_duration=0.0
+    video=None; audios=[]; actual_duration=0.0; width=0; height=0
     try:
         media=probe(path)
         video,audios,actual_duration=_stream_summary(media)
@@ -163,6 +304,17 @@ def evaluate_render_qa(
             blockers.append("render is too short for automatic posting")
         if actual_duration > 65.5:
             blockers.append("render is longer than the AutoClip short-form safety limit")
+        timing=_stream_timing(video,audios); checks["av_timing"]=timing
+        start_offset=float(timing.get("start_offset_seconds",0) or 0)
+        duration_delta=float(timing.get("duration_delta_seconds",0) or 0)
+        if start_offset > float(s.render_qa_max_av_start_offset_seconds):
+            blockers.append(f"audio/video start times differ by {start_offset:.3f}s")
+        elif start_offset > 0.20:
+            warnings.append(f"audio/video start offset is {start_offset:.3f}s")
+        if duration_delta > float(s.render_qa_max_av_duration_delta_seconds):
+            blockers.append(f"audio/video stream durations differ by {duration_delta:.3f}s")
+        elif duration_delta > 0.40:
+            warnings.append(f"audio/video duration delta is {duration_delta:.3f}s")
     except Exception as e:
         blockers.append(f"ffprobe validation failed: {type(e).__name__}: {e}")
 
@@ -175,6 +327,14 @@ def evaluate_render_qa(
                 blockers.append(f"black frames occupy {float(black['ratio'])*100:.1f}% of the render")
         except Exception as e:
             blockers.append(f"black-frame QA failed: {type(e).__name__}: {e}")
+        try:
+            freeze=_freeze_stats(path,actual_duration); checks["freeze_frames"]=freeze
+            if float(freeze["max_seconds"]) > float(s.render_qa_max_freeze_seconds):
+                blockers.append(f"video appears frozen for {freeze['max_seconds']:.2f}s")
+            if float(freeze["ratio"]) > float(s.render_qa_max_freeze_ratio):
+                blockers.append(f"frozen frames occupy {float(freeze['ratio'])*100:.1f}% of the render")
+        except Exception as e:
+            blockers.append(f"freeze-frame QA failed: {type(e).__name__}: {e}")
 
     if audios and actual_duration>0:
         try:
@@ -185,6 +345,20 @@ def evaluate_render_qa(
                 warnings.append(f"render is unusually quiet ({float(silence['ratio'])*100:.1f}% detected silence)")
         except Exception as e:
             blockers.append(f"audio QA failed: {type(e).__name__}: {e}")
+        try:
+            levels=_audio_level_stats(path,actual_duration); checks["audio_levels"]=levels
+            mean_db=levels.get("mean_db"); peak_db=levels.get("max_db")
+            if mean_db is None or peak_db is None:
+                warnings.append("audio loudness could not be measured")
+            else:
+                if float(mean_db) < float(s.render_qa_min_mean_volume_db):
+                    blockers.append(f"audio level is too low ({float(mean_db):.1f} dB mean)")
+                elif float(mean_db) > float(s.render_qa_loud_mean_volume_db):
+                    warnings.append(f"audio is unusually loud ({float(mean_db):.1f} dB mean)")
+                if float(peak_db) >= float(s.render_qa_peak_warning_db):
+                    warnings.append(f"audio peak reaches {float(peak_db):.2f} dBFS; inspect for clipping")
+        except Exception as e:
+            blockers.append(f"loudness QA failed: {type(e).__name__}: {e}")
 
     start=float(render_result.get("start",0) or 0); end=float(render_result.get("end",0) or 0)
     captions=_caption_metrics(words,start,end,s,str(clip.get("hook_text") or "")); checks["captions"]=captions
@@ -194,8 +368,31 @@ def evaluate_render_qa(
         blockers.append("caption safe margin is too close to platform UI")
     if int(captions["hook_chars"]) > 54:
         blockers.append("opening hook is too long to read safely")
-    if int(captions["hook_margin_v"]) < 70:
-        warnings.append("opening hook is close to the top platform UI safe zone")
+    if int(captions["hook_margin_v"]) < int(s.render_qa_hook_safe_margin):
+        blockers.append("opening hook is too close to the top platform UI safe zone")
+
+    if width>0 and height>0 and actual_duration>0:
+        try:
+            pixel=_caption_pixel_bounds(path,width,height,actual_duration); checks["caption_pixels"]=pixel
+            if pixel.get("available"):
+                hsafe=int(s.render_qa_text_horizontal_safe_margin)
+                for box in pixel.get("boxes") or []:
+                    if box["x"] < hsafe or box["x"]+box["w"] > width-hsafe:
+                        blockers.append("rendered caption/hook pixels enter the horizontal platform safe margin")
+                        break
+                upper=pixel.get("upper") or []; lower=pixel.get("lower") or []
+                if int(captions["hook_chars"])>0 and not upper:
+                    blockers.append("opening hook was expected but no rendered hook pixels were detected")
+                if int(captions["group_count"])>0 and not lower:
+                    blockers.append("captions were expected but no rendered caption pixels were detected")
+                if upper and min(x["y"] for x in upper) < int(s.render_qa_hook_safe_margin):
+                    blockers.append("rendered hook pixels enter the top platform safe zone")
+                if lower and max(x["y"]+x["h"] for x in lower) > height-int(s.render_qa_caption_safe_margin):
+                    blockers.append("rendered caption pixels enter the bottom platform safe zone")
+            else:
+                warnings.append("subtitle pixel QA unavailable because the render ASS file is missing")
+        except Exception as e:
+            blockers.append(f"caption pixel QA failed: {type(e).__name__}: {e}")
 
     motion=focus_motion_metrics(game_events,start,end); checks["framing_motion"]=motion
     if int(motion["points"]) >= 2:
@@ -203,8 +400,26 @@ def evaluate_render_qa(
             blockers.append(f"smart framing moves too fast ({motion['max_speed_per_second']:.2f} frame-widths/sec)")
         if float(motion["total_motion"]) > float(s.render_qa_max_focus_total_motion):
             blockers.append(f"smart framing travels too much ({motion['total_motion']:.2f} normalized distance)")
+
+    webcam_expected=bool(s.webcam_overlay_enabled and str(render_result.get("webcam_region") or ""))
+    webcam_box=render_result.get("webcam_box") if isinstance(render_result.get("webcam_box"),dict) else None
     if bool(s.webcam_overlay_enabled) and bool(s.webcam_manual_enabled) and not str(render_result.get("webcam_region") or ""):
         warnings.append("webcam overlay is enabled but no webcam region was rendered")
+    elif webcam_expected and webcam_box and actual_duration>0:
+        try:
+            border=_region_luma_stats(path,webcam_box,actual_duration,border_only=True)
+            interior=_region_luma_stats(path,webcam_box,actual_duration,border_only=False)
+            checks["webcam_pixels"]={"border":border,"interior":interior,"box":webcam_box}
+            if int(border.get("samples") or 0)<=0:
+                blockers.append("webcam border could not be verified in the encoded render")
+            elif float(border.get("median") or 0) < float(s.render_qa_webcam_border_min_luma):
+                blockers.append("expected webcam border is missing or obscured in the encoded render")
+            if int(interior.get("samples") or 0)>0 and float(interior.get("mean") or 0) < float(s.render_qa_webcam_blank_luma):
+                warnings.append("webcam interior appears nearly black; review camera visibility")
+        except Exception as e:
+            blockers.append(f"webcam pixel QA failed: {type(e).__name__}: {e}")
+    elif webcam_expected and not webcam_box:
+        warnings.append("webcam pixel QA skipped because legacy render geometry is unavailable")
 
     status="review" if blockers else "pass"
     return {
