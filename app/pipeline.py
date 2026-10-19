@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, json, traceback
+import hashlib, json, traceback, threading
 from pathlib import Path
 from .config import load_settings
 from . import db
@@ -19,6 +19,19 @@ from .hooks import generate_hook
 from .quality import evaluate_render
 from .render_qa import evaluate_render_qa
 from .debug_log import start_job_log, append_job_log, append_job_exception
+
+_render_lock_guard=threading.Lock()
+_render_locks: dict[int,threading.Lock]={}
+
+class RenderBusyError(RuntimeError):
+    pass
+
+def _clip_render_lock(clip_id: int) -> threading.Lock:
+    with _render_lock_guard:
+        lock=_render_locks.get(int(clip_id))
+        if lock is None:
+            lock=threading.Lock(); _render_locks[int(clip_id)]=lock
+        return lock
 
 def _key(path: Path):
     st=path.stat()
@@ -144,7 +157,7 @@ def _apply_render_state(clip_id: int, qa: dict, best: dict|None):
         db.exec_sql("UPDATE clips SET status='needs_review',best_variant='',output_path='' WHERE id=?",(clip_id,))
     return best
 
-def render_clip_id(clip_id: int, variant: str|None=None):
+def _render_clip_id_unlocked(clip_id: int, variant: str|None=None, finalize_status: bool=True):
     s=load_settings()
     variant=variant or s.primary_variant
     if variant not in s.render_variants:
@@ -157,9 +170,15 @@ def render_clip_id(clip_id: int, variant: str|None=None):
     tx,game_events=_render_context(clip,source,s)
     safe="".join(c if c.isalnum() or c in "-_" else "_" for c in clip["title"][:45]).strip("_") or f"clip_{clip_id}"
     out=s.output_path/f"{clip_id:04d}_{variant}_{safe}.mp4"
+    partial=out.with_name(out.stem+".partial.mp4")
     db.exec_sql("UPDATE clips SET status='rendering' WHERE id=?",(clip_id,))
     try:
-        result=render_clip(source,clip,tx.get("words",[]),out,s,variant=variant,game_events=game_events)
+        partial.unlink(missing_ok=True)
+        result=render_clip(source,clip,tx.get("words",[]),partial,s,variant=variant,game_events=game_events)
+        # Never expose a partially written MP4. os.replace semantics used by Path.replace
+        # keep the prior good render in place until the new file has fully closed.
+        partial.replace(out)
+        result["path"]=out
         quality=(evaluate_render(clip,tx.get("words",[]),result,str(clip.get("hook_text") or "")) if s.quality_scoring_enabled else {"score":0.0})
         qa=evaluate_render_qa(out,clip,tx.get("words",[]),result,s,game_events=game_events)
         db.upsert_render(clip_id,variant,str(out),result["start"],result["end"],result["focus"],
@@ -180,14 +199,26 @@ def render_clip_id(clip_id: int, variant: str|None=None):
                 best=db.q("SELECT * FROM renders WHERE clip_id=? AND is_best=1 AND qa_status='pass'",(clip_id,),one=True)
         else:
             best=db.choose_best_render(clip_id)
-        _apply_render_state(clip_id,qa,best)
+        if finalize_status:
+            _apply_render_state(clip_id,qa,best)
         result["quality"]=quality
         result["render_qa"]=qa
         result["best_variant"]=(best or {}).get("variant") or ""
         return result
     except Exception:
+        try: partial.unlink(missing_ok=True)
+        except Exception: pass
         db.exec_sql("UPDATE clips SET status='error' WHERE id=?",(clip_id,))
         raise
+
+def render_clip_id(clip_id: int, variant: str|None=None):
+    lock=_clip_render_lock(clip_id)
+    if not lock.acquire(blocking=False):
+        raise RenderBusyError(f"Clip {clip_id} is already rendering. Wait for the current render to finish.")
+    try:
+        return _render_clip_id_unlocked(clip_id,variant,finalize_status=True)
+    finally:
+        lock.release()
 
 def rerun_render_qa(render_id: int):
     """Reinspect an existing render after upgrades/settings changes without re-encoding it."""
@@ -216,12 +247,24 @@ def rerun_render_qa(render_id: int):
     return {"render_id":int(render_id),"qa":qa,"best_variant":(best or {}).get("variant") or ""}
 
 def render_all_variants(clip_id: int):
-    s=load_settings(); results=[]
-    for variant in s.render_variants:
-        results.append(render_clip_id(clip_id,variant))
-    best=db.choose_best_render(clip_id) if s.best_variant_auto_select else None
-    if best:
-        db.exec_sql("UPDATE clips SET status='rendered' WHERE id=?",(clip_id,))
-    elif all(not bool(x.get("render_qa",{}).get("passed")) for x in results):
-        db.exec_sql("UPDATE clips SET status='needs_review',best_variant='',output_path='' WHERE id=?",(clip_id,))
-    return results
+    lock=_clip_render_lock(clip_id)
+    if not lock.acquire(blocking=False):
+        raise RenderBusyError(f"Clip {clip_id} is already rendering. Wait for the current render to finish.")
+    try:
+        s=load_settings(); results=[]
+        db.exec_sql("UPDATE clips SET status='rendering' WHERE id=?",(clip_id,))
+        for variant in s.render_variants:
+            results.append(_render_clip_id_unlocked(clip_id,variant,finalize_status=False))
+        best=db.choose_best_render(clip_id) if s.best_variant_auto_select else None
+        if best:
+            db.exec_sql("UPDATE clips SET status='rendered' WHERE id=?",(clip_id,))
+        elif all(not bool(x.get("render_qa",{}).get("passed")) for x in results):
+            db.exec_sql("UPDATE clips SET status='needs_review',best_variant='',output_path='' WHERE id=?",(clip_id,))
+        else:
+            db.exec_sql("UPDATE clips SET status='rendered' WHERE id=?",(clip_id,))
+        return results
+    except Exception:
+        db.exec_sql("UPDATE clips SET status='error' WHERE id=?",(clip_id,))
+        raise
+    finally:
+        lock.release()
