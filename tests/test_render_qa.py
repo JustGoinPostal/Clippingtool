@@ -78,11 +78,24 @@ def _safe_probe(duration: float = 22.0, audio: bool = True):
     return {"streams":streams,"format":{"duration":str(duration)}}
 
 
+def _safe_saturation():
+    return {
+        "sample_count":1000,
+        "max_abs":20000,
+        "near_fullscale_samples":0,
+        "hard_fullscale_samples":0,
+        "near_fullscale_ratio":0.0,
+        "hard_fullscale_ratio":0.0,
+        "longest_hard_run":0,
+    }
+
+
 def _patch_safe_media(monkeypatch):
     monkeypatch.setattr(render_qa,"_black_stats",lambda p,d:{"segments":[],"total_seconds":0.0,"max_seconds":0.0,"ratio":0.0})
     monkeypatch.setattr(render_qa,"_freeze_stats",lambda p,d:{"segments":[],"total_seconds":0.0,"max_seconds":0.0,"ratio":0.0})
     monkeypatch.setattr(render_qa,"_silence_stats",lambda p,d:{"segments":[],"total_seconds":0.0,"max_seconds":0.0,"ratio":0.0})
     monkeypatch.setattr(render_qa,"_audio_level_stats",lambda p,d:{"mean_db":-18.0,"max_db":-1.0})
+    monkeypatch.setattr(render_qa,"pcm_saturation_stats",lambda p,d:_safe_saturation())
     monkeypatch.setattr(render_qa,"_caption_pixel_bounds",lambda p,w,h,d:{"available":False,"boxes":[],"upper":[],"lower":[]})
 
 
@@ -100,6 +113,27 @@ def test_finished_render_passes_when_media_is_safe(tmp_path: Path, monkeypatch):
     assert result["checks"]["width"] == 1080
     assert result["checks"]["audio_streams"] == 1
     assert result["checks"]["audio_levels"]["mean_db"] == -18.0
+    assert result["checks"]["audio_saturation"]["hard_fullscale_ratio"] == 0.0
+
+
+def test_severe_full_scale_saturation_blocks_finished_render(tmp_path: Path, monkeypatch):
+    path=tmp_path/"saturated.mp4"; path.write_bytes(b"x"*120_000)
+    monkeypatch.setattr(render_qa,"probe",lambda p:_safe_probe())
+    _patch_safe_media(monkeypatch)
+    monkeypatch.setattr(render_qa,"pcm_saturation_stats",lambda p,d:{
+        "sample_count":480000,
+        "max_abs":32768,
+        "near_fullscale_samples":12000,
+        "hard_fullscale_samples":4800,
+        "near_fullscale_ratio":0.025,
+        "hard_fullscale_ratio":0.01,
+        "longest_hard_run":400,
+    })
+    result=render_qa.evaluate_render_qa(path,{"hook_text":""},[],
+        {"start":0.0,"end":22.0,"focus":"center","webcam_region":""},Settings(),game_events=[])
+    assert result["passed"] is False
+    assert any("full-scale saturation" in x for x in result["blockers"])
+    assert result["checks"]["audio_saturation"]["longest_hard_run"] == 400
 
 
 def test_finished_render_fails_closed_on_missing_audio_black_and_freeze(tmp_path: Path, monkeypatch):
