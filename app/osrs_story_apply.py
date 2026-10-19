@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .config import Settings
@@ -28,11 +29,13 @@ def _compatible(candidate_type: str, story_type: str) -> bool:
     s = (story_type or "").lower()
     if c == s:
         return True
-    if s in {"pvp_kill", "player_loot", "big_hit"} and c in {"pvp", "combat", "gameplay"}:
+    if s in {"pvp_kill", "pvp_escape", "player_loot", "big_hit"} and c in {"pvp", "combat", "gameplay", "reaction"}:
         return True
-    if s in {"rare_drop", "collection_log", "raid_reward", "raid_complete", "loot", "npc_loot"} and c in {"drop", "gameplay"}:
+    if s in {"pet_drop", "rare_drop", "collection_log", "raid_reward", "raid_complete", "loot", "npc_loot"} and c in {"drop", "gameplay", "reaction"}:
         return True
     if s == "player_death" and c in {"death", "reaction", "gameplay"}:
+        return True
+    if s in {"combat_achievement", "skill_milestone", "quest_complete", "personal_best", "boss_kill"} and c in {"reaction", "gameplay", "speech"}:
         return True
     return False
 
@@ -41,10 +44,17 @@ def _story_score(story: dict[str, Any], current: float = 0.0) -> float:
     strength = float(story.get("strength", 0.0) or 0.0)
     payload = story.get("payload") if isinstance(story.get("payload"), dict) else {}
     archetype = str(payload.get("moment_archetype") or "")
-    bonus = 5.0 if archetype in {"pvp_finish", "reward_reveal", "death_collapse"} else 0.0
+    bonus = 5.0 if archetype in {"pvp_finish", "reward_reveal", "pet_reveal", "death_collapse", "pvp_escape"} else 0.0
     if archetype == "high_value_pk":
         bonus = 10.0
+    if archetype == "pvp_smite":
+        bonus = 12.0
     return min(100.0, max(float(current or 0.0), 15.0 + strength + bonus))
+
+
+def _smite_signal(text: str) -> bool:
+    low = (text or "").lower()
+    return bool(re.search(r"\bsmite(?:d|s|ing)?\b|\bno prayer\b|\bgot (?:his|their) \+?1\b", low))
 
 
 def _decorate(candidate: dict[str, Any], story: dict[str, Any], segments: list[dict[str, Any]], total: float, s: Settings) -> dict[str, Any]:
@@ -52,22 +62,37 @@ def _decorate(candidate: dict[str, Any], story: dict[str, Any], segments: list[d
     start, end = story_window(segments, story, total, s)
     typ = normalize_event_type(story.get("event_type", ""), story.get("payload") or {})
     payload = dict(story.get("payload") or {})
+    clip_text = _clip_text(segments, start, end) or str(out.get("transcript") or "")
     archetype = str(payload.get("moment_archetype") or typ)
-    score = _story_score(story, float(out.get("score", 0) or 0))
+
+    # RuneLite can prove the kill/loot, but it cannot reliably expose an opponent's
+    # prayer points. Promote to a smite story only when the exact PK is also paired
+    # with the local spoken reaction around that same moment.
+    if typ == "pvp_kill" and _smite_signal(clip_text):
+        payload["smite_signal"] = True
+        payload["smite_signal_source"] = "local_transcript"
+        payload["moment_archetype"] = "pvp_smite"
+        archetype = "pvp_smite"
+
+    score = _story_score({**story, "payload": payload}, float(out.get("score", 0) or 0))
     out.update({
         "start": round(start, 2),
         "end": round(end, 2),
         "score": round(score, 1),
         "base_score": round(max(float(out.get("base_score", 0) or 0), score), 1),
         "event_type": typ,
-        "event_summary": summarize_event(story),
+        "event_summary": summarize_event({**story, "payload": payload}),
         "event_context": payload,
         "story_archetype": archetype,
-        "transcript": _clip_text(segments, start, end) or str(out.get("transcript") or ""),
+        "transcript": clip_text,
     })
     features = dict(out.get("features") or {})
     features["runelite_event"] = max(float(features.get("runelite_event", 0) or 0), min(1.0, float(story.get("strength", 0) or 0) / 55.0))
     features["osrs_story"] = 1.0
+    if bool(payload.get("inferred")):
+        features["inferred_story"] = 1.0
+    if bool(payload.get("smite_signal")):
+        features["smite_signal"] = 1.0
     if float(payload.get("loot_value", payload.get("total_value", 0)) or 0) >= 20_000_000:
         features["high_value"] = 1.0
     out["features"] = features
@@ -84,13 +109,18 @@ def apply_story_intelligence(
     total_duration: float,
     s: Settings,
 ) -> list[dict[str, Any]]:
-    """Promote exact OSRS story arcs without crushing personality-only clips."""
+    """Promote exact/inferred OSRS story arcs without crushing personality-only clips."""
     stories = build_story_events(game_events)
     if not stories:
         return candidates
     segments = list(transcript.get("segments") or [])
     output = [dict(c) for c in candidates]
     matched_indexes: set[int] = set()
+
+    always_keep_types = {
+        "pvp_kill", "pvp_escape", "player_death", "collection_log", "pet_drop", "rare_drop", "raid_reward",
+        "raid_complete", "combat_achievement", "quest_complete", "personal_best", "boss_kill",
+    }
 
     for story in stories:
         typ = normalize_event_type(story.get("event_type", ""), story.get("payload") or {})
@@ -115,10 +145,7 @@ def apply_story_intelligence(
             matched_indexes.add(idx)
             continue
 
-        # Strong exact moments should survive even if generic scoring discarded the
-        # raw event during de-duplication. Low-value standalone loot/big hits still
-        # need reaction/visual evidence and are left to the normal scorer.
-        if strength < 34.0 and typ not in {"pvp_kill", "player_death", "collection_log", "rare_drop", "raid_reward"}:
+        if strength < 34.0 and typ not in always_keep_types:
             continue
         start, end = story_window(segments, story, total_duration, s)
         synthesized = {
@@ -127,7 +154,7 @@ def apply_story_intelligence(
             "score": _story_score(story),
             "base_score": _story_score(story),
             "personal_score": 0.0,
-            "reason": "exact RuneLite OSRS story moment",
+            "reason": "RuneLite OSRS story moment",
             "transcript": _clip_text(segments, start, end),
             "event_type": typ,
             "features": {"runelite_event": min(1.0, strength / 55.0), "osrs_story": 1.0},
@@ -135,8 +162,6 @@ def apply_story_intelligence(
         }
         output.append(_decorate(synthesized, story, segments, total_duration, s))
 
-    # Story synthesis can overlap a lower-value generic candidate. Prefer the best
-    # score while retaining unrelated reaction/personality moments.
     output.sort(key=lambda c: float(c.get("score", 0) or 0), reverse=True)
     keep: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
