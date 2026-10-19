@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .captions import write_ass
 from .config import Settings
+from .framing import build_focus_keyframes, crop_x_expression
 from .media import require_ffmpeg
 from .render import (
     _ffmpeg_filter_path,
@@ -25,13 +26,16 @@ def _shorts_focus_mode(clip: dict) -> str:
     return "combat" if mode == "combat" else "center"
 
 
-def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Settings) -> str:
-    """Create a full-height 9:16 gameplay crop centered on the source frame."""
+def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Settings,
+                    focus_keyframes: list[dict] | None = None) -> str:
+    """Create a full-height 9:16 crop that follows RuneLite focus coordinates when available."""
+    keyframes=focus_keyframes or []
+    crop_x=crop_x_expression(keyframes) if keyframes else "(iw-ow)/2"
     base = (
         "crop="
         "w='trunc(ih*9/16/2)*2':"
         "h='trunc(ih/2)*2':"
-        "x='(iw-ow)/2':y=0,"
+        f"x='{crop_x}':y=0,"
         f"scale={width}:{height}:flags=lanczos"
     )
     if not s.dynamic_zoom_enabled or duration < 2.0:
@@ -60,6 +64,7 @@ def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Sett
         f"max(0,1-abs(on-{payoff_mid})/{payoff_half}),0)"
     )
     z = f"min(1.28,1+{pulse:.4f}*({beat_expr})+{strength:.4f}*({payoff_expr}))"
+    # Zoom motion stays centered inside the already RuneLite-guided crop.
     x = "iw/2-(iw/zoom/2)"
     y = "ih/2-(ih/zoom/2)"
     return (
@@ -96,11 +101,13 @@ def _manual_webcam_crop(source: Path, s: Settings) -> tuple[str, str, float] | N
 
 
 def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
-                      s: Settings, duration: float) -> tuple[str, str, str]:
-    """Fill the Short with centered gameplay plus only the real configured webcam."""
+                      s: Settings, duration: float, game_events: list[dict] | None = None
+                      ) -> tuple[str, str, str, int]:
+    """Fill the Short with RuneLite-guided gameplay plus only the real configured webcam."""
     rw, rh = int(s.render_width), int(s.render_height)
     mode = _shorts_focus_mode(clip)
-    game_chain = _gameplay_chain(mode, rw, rh, duration, s)
+    focus_keyframes=build_focus_keyframes(game_events or [],start,start+duration)
+    game_chain = _gameplay_chain(mode, rw, rh, duration, s,focus_keyframes=focus_keyframes)
 
     configured_region = str(s.webcam_region or "auto").lower()
     manual = _manual_webcam_crop(source, s) if configured_region in {"auto", "manual"} else None
@@ -117,7 +124,8 @@ def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
     if webcam:
         region, _ = webcam
         if region != "manual" and _reaction_only_source(source, start, s, region):
-            return _reaction_filter(source, start, ass_path, s, webcam)
+            graph,region_name,render_mode=_reaction_filter(source, start, ass_path, s, webcam)
+            return graph,region_name,render_mode,len(focus_keyframes)
 
     if webcam:
         region, cam_crop = webcam
@@ -134,15 +142,15 @@ def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
             f"[game2][cam2]overlay={cam_x}:{cam_y}[stage1];"
             f"[stage1]ass='{ass_path}',setsar=1[v]"
         )
-        return graph, region, "gameplay_fullscreen"
+        return graph, region, "gameplay_fullscreen",len(focus_keyframes)
 
     graph = f"[0:v]{game_chain},ass='{ass_path}',setsar=1[v]"
-    return graph, "", "gameplay_fullscreen"
+    return graph, "", "gameplay_fullscreen",len(focus_keyframes)
 
 
 def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Settings,
-                variant: str | None = None, progress=None):
-    """Shorts renderer: centered gameplay plus the calibrated Postal webcam."""
+                variant: str | None = None, progress=None, game_events: list[dict] | None = None):
+    """Shorts renderer: RuneLite-guided gameplay plus the calibrated Postal webcam."""
     if s.layout != "osrs_focus":
         return _legacy_render_clip(source, clip, words, output, s, variant=variant, progress=progress)
 
@@ -158,7 +166,9 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
     write_ass(words, start, end, ass, s, hook_text=hook_text)
     ap = _ffmpeg_filter_path(ass)
 
-    fc, webcam_region, render_mode = _full_game_filter(source, start, clip, ap, s, dur)
+    fc, webcam_region, render_mode,focus_points = _full_game_filter(
+        source,start,clip,ap,s,dur,game_events=game_events
+    )
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
         "-ss", str(start), "-i", str(source), "-t", str(dur),
@@ -167,7 +177,8 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output),
     ]
     if progress:
-        progress(f"Rendering {variant} vertical clip ({render_mode})")
+        framing=f", {focus_points} RuneLite framing points" if focus_points else ", centered fallback"
+        progress(f"Rendering {variant} vertical clip ({render_mode}{framing})")
     subprocess.run(cmd, check=True)
 
     return {
@@ -179,6 +190,8 @@ def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Se
         "focus": mode if (mode := _shorts_focus_mode(clip)) else "center",
         "hook_text": hook_text,
         "dynamic_zoom": bool(s.dynamic_zoom_enabled),
+        "smart_framing": bool(focus_points),
+        "smart_framing_points": focus_points,
         "webcam_region": webcam_region,
         "webcam_position": "top_center" if webcam_region else "",
         "render_mode": render_mode,
