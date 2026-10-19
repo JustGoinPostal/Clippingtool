@@ -50,8 +50,10 @@ if (-not (Test-Path $GradleBat)) {
 }
 
 Write-Host ''
-Write-Host 'Building against the current RuneLite API...'
-& $GradleBat -p $ProjectDir clean testClasses shadowJar --no-daemon
+Write-Host 'Checking/building against the current RuneLite API...'
+# Do not clean here. Gradle's incremental checks make normal launches fast while
+# still rebuilding automatically after git pull changes the companion source.
+& $GradleBat -p $ProjectDir testClasses shadowJar --no-daemon
 if ($LASTEXITCODE -ne 0) {
     throw "Gradle build failed with exit code $LASTEXITCODE."
 }
@@ -65,6 +67,6 @@ $destination = Join-Path $ProjectDir $jar.Name
 Copy-Item -Path $jar.FullName -Destination $destination -Force
 
 Write-Host ''
-Write-Host "Private companion built successfully: $destination"
+Write-Host "Private companion ready: $destination"
 Write-Host 'The JAR stays local on this PC and is not published to the RuneLite Plugin Hub.'
 Write-Host ''
