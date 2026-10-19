@@ -54,9 +54,14 @@ def build_focus_keyframes(game_events: list[dict] | None, start: float, end: flo
         dedup.append(row)
 
     # Remove near-identical consecutive points so the FFmpeg expression remains small.
+    # Compare both axes: a vertically important boss/player movement should not be
+    # discarded just because horizontal focus stayed almost unchanged.
     compact=[]
     for row in dedup:
-        if compact and abs(row["x"]-compact[-1]["x"]) < 0.012 and row["time"]-compact[-1]["time"] < 2.5:
+        if (compact
+            and abs(row["x"]-compact[-1]["x"]) < 0.012
+            and abs(row["y"]-compact[-1]["y"]) < 0.015
+            and row["time"]-compact[-1]["time"] < 2.5):
             if row["exact"] > compact[-1]["exact"]:
                 compact[-1]=row
             continue
@@ -64,16 +69,18 @@ def build_focus_keyframes(game_events: list[dict] | None, start: float, end: flo
     return compact[:120]
 
 
-def focus_ratio_expression(keyframes: list[dict[str,float]]) -> str:
-    """Build a smooth piecewise-linear FFmpeg expression for horizontal focus."""
+def focus_ratio_expression(keyframes: list[dict[str,float]], axis: str = "x") -> str:
+    """Build a smooth piecewise-linear FFmpeg expression for one focus axis."""
+    key="y" if str(axis).lower()=="y" else "x"
     if not keyframes:
         return "0.5"
     if len(keyframes)==1:
-        return f"{float(keyframes[0]['x']):.6f}"
+        return f"{float(keyframes[0].get(key,0.5)):.6f}"
 
     def segment(i: int) -> str:
         a=keyframes[i]; b=keyframes[i+1]
-        t0=float(a["time"]); t1=float(b["time"]); x0=float(a["x"]); x1=float(b["x"])
+        t0=float(a["time"]); t1=float(b["time"])
+        x0=float(a.get(key,0.5)); x1=float(b.get(key,0.5))
         dt=max(0.001,t1-t0)
         interp=f"({x0:.6f}+({x1-x0:.6f})*max(0,min(1,(t-{t0:.3f})/{dt:.3f})))"
         if i==len(keyframes)-2:
@@ -83,11 +90,21 @@ def focus_ratio_expression(keyframes: list[dict[str,float]]) -> str:
     first=keyframes[0]
     body=segment(0)
     if float(first["time"]) > 0.001:
-        body=f"if(lt(t,{float(first['time']):.3f}),{float(first['x']):.6f},{body})"
+        body=f"if(lt(t,{float(first['time']):.3f}),{float(first.get(key,0.5)):.6f},{body})"
     return body
+
+
+def focus_y_ratio_expression(keyframes: list[dict[str,float]]) -> str:
+    return focus_ratio_expression(keyframes,"y")
 
 
 def crop_x_expression(keyframes: list[dict[str,float]]) -> str:
     """Center a vertical crop on the RuneLite focus ratio while clamping to source bounds."""
-    ratio=focus_ratio_expression(keyframes)
+    ratio=focus_ratio_expression(keyframes,"x")
     return f"max(0,min(iw-ow,iw*({ratio})-ow/2))"
+
+
+def zoompan_y_expression(keyframes: list[dict[str,float]]) -> str:
+    """Keep RuneLite's vertical subject near center during zoom without leaving frame bounds."""
+    ratio=focus_y_ratio_expression(keyframes)
+    return f"max(0,min(ih-ih/zoom,ih*({ratio})-ih/(2*zoom)))"
