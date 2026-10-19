@@ -170,16 +170,45 @@ def _tiktok_chunk_plan(size:int)->tuple[int,int]:
 
 
 def _tiktok_put_chunk(client:httpx.Client,upload_url:str,mime:str,blob:bytes,first:int,size:int)->None:
+    """Upload one deterministic byte range and retry only transient failures.
+
+    Retrying the same Content-Range is safer than replaying the whole TikTok post
+    after a publish ID already exists. Permanent 4xx responses still fail fast.
+    """
     last=first+len(blob)-1
     retries=max(1,min(6,int(load_settings().publish_max_attempts)))
+    retryable_status={408,409,425,429}
+    last_error:BaseException|None=None
     for attempt in range(retries):
-        r=client.put(upload_url,headers={"Content-Type":mime,"Content-Length":str(len(blob)),
-            "Content-Range":f"bytes {first}-{last}/{size}"},content=blob)
-        if r.status_code < 500:
-            r.raise_for_status(); return
+        response=None
+        try:
+            response=client.put(upload_url,headers={"Content-Type":mime,"Content-Length":str(len(blob)),
+                "Content-Range":f"bytes {first}-{last}/{size}"},content=blob)
+            status=int(response.status_code)
+            if status < 400:
+                return
+            if status not in retryable_status and status < 500:
+                response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                last_error=e
+        except httpx.TransportError as e:
+            last_error=e
         if attempt+1>=retries:
-            r.raise_for_status()
-        time.sleep(min(8.0,0.75*(2**attempt)))
+            if last_error is not None:
+                raise last_error
+            if response is not None:
+                response.raise_for_status()
+            raise RuntimeError("TikTok chunk upload failed without a response")
+        delay=min(8.0,0.75*(2**attempt))
+        if response is not None:
+            try:
+                retry_after=float(response.headers.get("Retry-After") or 0)
+                if retry_after>0: delay=min(30.0,retry_after)
+            except Exception:
+                pass
+        time.sleep(delay)
 
 
 def publish_tiktok(path: Path,post: dict[str,Any],checkpoint:Checkpoint|None=None) -> dict[str,Any]:
