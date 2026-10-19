@@ -10,6 +10,7 @@ from .render import (
     _ffmpeg_filter_path,
     _reaction_filter,
     _reaction_only_source,
+    _source_size,
     _webcam_crop,
     focus_mode,
     render_clip as _legacy_render_clip,
@@ -25,12 +26,7 @@ def _shorts_focus_mode(clip: dict) -> str:
 
 
 def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Settings) -> str:
-    """Create a full-height 9:16 gameplay crop centered on the source frame.
-
-    The previous renderer biased the crop 62% to the right, which pushed the actual
-    gameplay center out of frame and exposed too much RuneLite side UI. Keep the base
-    crop geometrically centered, then keep every dynamic zoom locked to that center.
-    """
+    """Create a full-height 9:16 gameplay crop centered on the source frame."""
     base = (
         "crop="
         "w='trunc(ih*9/16/2)*2':"
@@ -64,8 +60,6 @@ def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Sett
         f"max(0,1-abs(on-{payoff_mid})/{payoff_half}),0)"
     )
     z = f"min(1.28,1+{pulse:.4f}*({beat_expr})+{strength:.4f}*({payoff_expr}))"
-    # Keep the zoom fixed on the exact center. The old sine/cosine pan made the
-    # framing wander away from the player during the most important moments.
     x = "iw/2-(iw/zoom/2)"
     y = "ih/2-(ih/zoom/2)"
     return (
@@ -75,32 +69,61 @@ def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Sett
     )
 
 
+def _manual_webcam_crop(source: Path, s: Settings) -> tuple[str, str, float] | None:
+    """Return Postal's exact OBS webcam rectangle using normalized source coordinates."""
+    if not bool(getattr(s, "webcam_manual_enabled", False)):
+        return None
+    width, height = _source_size(source)
+    if width <= 0 or height <= 0:
+        return None
+
+    xr = max(0.0, min(0.98, float(s.webcam_manual_x_ratio)))
+    yr = max(0.0, min(0.98, float(s.webcam_manual_y_ratio)))
+    wr = max(0.02, min(1.0 - xr, float(s.webcam_manual_width_ratio)))
+    hr = max(0.02, min(1.0 - yr, float(s.webcam_manual_height_ratio)))
+
+    x = int(round(width * xr))
+    y = int(round(height * yr))
+    w = max(2, int(round(width * wr)))
+    h = max(2, int(round(height * hr)))
+    if x + w > width:
+        w = width - x
+    if y + h > height:
+        h = height - y
+    if w < 2 or h < 2:
+        return None
+    return "manual", f"crop={w}:{h}:{x}:{y}", w / h
+
+
 def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
                       s: Settings, duration: float) -> tuple[str, str, str]:
-    """Fill the entire 9:16 Short with gameplay and only a deliberately configured webcam.
-
-    Auto webcam detection is intentionally fail-closed for Shorts. RuneLite chat, loot
-    panels, inventory, and other UI can look enough like a webcam to a heuristic detector
-    that a false positive is worse than omitting the camera. Set webcam_region explicitly
-    to top_left/top_right/bottom_left/bottom_right when the source layout is known.
-    """
+    """Fill the Short with centered gameplay plus only the real configured webcam."""
     rw, rh = int(s.render_width), int(s.render_height)
     mode = _shorts_focus_mode(clip)
     game_chain = _gameplay_chain(mode, rw, rh, duration, s)
 
     configured_region = str(s.webcam_region or "auto").lower()
-    webcam = None if configured_region == "auto" else _webcam_crop(source, start, s)
+    manual = _manual_webcam_crop(source, s) if configured_region in {"auto", "manual"} else None
+    webcam = None
+    camera_aspect = 16 / 9
+    if manual:
+        region, cam_crop, camera_aspect = manual
+        webcam = (region, cam_crop)
+    elif configured_region != "auto":
+        webcam = _webcam_crop(source, start, s)
 
-    # Reaction-only detection is only safe when the camera corner was explicitly chosen.
+    # The old reaction-only detector assumes one of the four 16:9 corner boxes.
+    # Do not run it against the calibrated manual rectangle.
     if webcam:
         region, _ = webcam
-        if _reaction_only_source(source, start, s, region):
+        if region != "manual" and _reaction_only_source(source, start, s, region):
             return _reaction_filter(source, start, ass_path, s, webcam)
 
     if webcam:
         region, cam_crop = webcam
         cam_w = max(300, min(int(s.webcam_overlay_width), int(rw * 0.42)))
-        cam_h = int(round(cam_w * 9 / 16))
+        cam_h = max(160, int(round(cam_w / max(0.5, camera_aspect))))
+        cam_h = min(cam_h, int(rh * 0.30))
         cam_x = (rw - cam_w) // 2
         cam_y = 54
         graph = (
@@ -119,7 +142,7 @@ def _full_game_filter(source: Path, start: float, clip: dict, ass_path: str,
 
 def render_clip(source: Path, clip: dict, words: list[dict], output: Path, s: Settings,
                 variant: str | None = None, progress=None):
-    """Shorts renderer: full-frame gameplay first, explicit webcam only as an overlay."""
+    """Shorts renderer: centered gameplay plus the calibrated Postal webcam."""
     if s.layout != "osrs_focus":
         return _legacy_render_clip(source, clip, words, output, s, variant=variant, progress=progress)
 
