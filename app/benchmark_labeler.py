@@ -64,16 +64,21 @@ def load_label_state(job_id: int) -> dict[str,Any]:
     if not path.exists(): return {"schema_version":1,"job_id":int(job_id),"assisted":False,"labels":[]}
     try:
         payload=json.loads(path.read_text(encoding="utf-8"))
+        # Provenance did not exist in legacy drafts. Unknown provenance is never
+        # allowed to silently become blind held-out truth in a commercial gate.
         if isinstance(payload,list):
-            return {"schema_version":1,"job_id":int(job_id),"assisted":False,"labels":[dict(x) for x in payload if isinstance(x,dict)]}
+            return {"schema_version":1,"job_id":int(job_id),"assisted":True,"labels":[dict(x) for x in payload if isinstance(x,dict)]}
         if not isinstance(payload,dict): raise ValueError
         rows=[dict(x) for x in (payload.get("labels") or []) if isinstance(x,dict)]
+        assisted=bool(payload["assisted"]) if "assisted" in payload else True
         return {
             "schema_version":int(payload.get("schema_version",1) or 1),"job_id":int(job_id),
-            "assisted":bool(payload.get("assisted",False)),"labels":rows,
+            "assisted":assisted,"labels":rows,
         }
     except Exception:
-        return {"schema_version":1,"job_id":int(job_id),"assisted":False,"labels":[]}
+        # A corrupt existing provenance file must be rebuilt as tuning data, not
+        # accidentally upgraded to blind held-out data after a later save.
+        return {"schema_version":1,"job_id":int(job_id),"assisted":True,"labels":[]}
 
 
 def _write_label_state(job_id: int, labels: list[dict[str,Any]], assisted: bool) -> None:
