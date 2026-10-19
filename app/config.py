@@ -94,6 +94,17 @@ class Settings(BaseModel):
     render_qa_max_focus_total_motion: float = 2.80
     render_qa_max_caption_chars: int = 44
     render_qa_caption_safe_margin: int = 120
+    render_qa_text_horizontal_safe_margin: int = 36
+    render_qa_hook_safe_margin: int = 60
+    render_qa_max_freeze_seconds: float = 4.5
+    render_qa_max_freeze_ratio: float = 0.28
+    render_qa_min_mean_volume_db: float = -40.0
+    render_qa_loud_mean_volume_db: float = -8.0
+    render_qa_peak_warning_db: float = -0.10
+    render_qa_max_av_start_offset_seconds: float = 0.45
+    render_qa_max_av_duration_delta_seconds: float = 0.90
+    render_qa_webcam_border_min_luma: float = 150.0
+    render_qa_webcam_blank_luma: float = 12.0
 
     # v0.6 publishing queue
     publishing_enabled: bool = True
