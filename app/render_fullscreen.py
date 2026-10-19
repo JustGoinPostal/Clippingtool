@@ -25,18 +25,17 @@ def _shorts_focus_mode(clip: dict) -> str:
 
 
 def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Settings) -> str:
-    """Create a full-height 9:16 gameplay crop that deliberately excludes lower-left chat.
+    """Create a full-height 9:16 gameplay crop centered on the source frame.
 
-    The crop is shifted slightly right of source center before scaling. Dynamic motion is
-    applied only after that crop, so zoom/pan can never wander back into the OSRS chat box.
+    The previous renderer biased the crop 62% to the right, which pushed the actual
+    gameplay center out of frame and exposed too much RuneLite side UI. Keep the base
+    crop geometrically centered, then keep every dynamic zoom locked to that center.
     """
-    # A 9:16 slice based on source height. 0.62 of the available horizontal travel keeps
-    # the player/gameplay area while excluding the left-side OSRS chat in normal OBS layouts.
     base = (
         "crop="
         "w='trunc(ih*9/16/2)*2':"
         "h='trunc(ih/2)*2':"
-        "x='(iw-ow)*0.62':y=0,"
+        "x='(iw-ow)/2':y=0,"
         f"scale={width}:{height}:flags=lanczos"
     )
     if not s.dynamic_zoom_enabled or duration < 2.0:
@@ -65,9 +64,10 @@ def _gameplay_chain(mode: str, width: int, height: int, duration: float, s: Sett
         f"max(0,1-abs(on-{payoff_mid})/{payoff_half}),0)"
     )
     z = f"min(1.28,1+{pulse:.4f}*({beat_expr})+{strength:.4f}*({payoff_expr}))"
-    # Motion stays inside the already chat-free vertical crop.
-    x = "iw/2-(iw/zoom/2)+sin(on/65)*(iw-iw/zoom)*0.08"
-    y = "ih/2-(ih/zoom/2)+cos(on/80)*(ih-ih/zoom)*0.05"
+    # Keep the zoom fixed on the exact center. The old sine/cosine pan made the
+    # framing wander away from the player during the most important moments.
+    x = "iw/2-(iw/zoom/2)"
+    y = "ih/2-(ih/zoom/2)"
     return (
         base
         + f",fps=30,zoompan=z='{z}':x='{x}':y='{y}':"
