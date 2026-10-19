@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.config import Settings
+import app.pipeline as pipeline
 import app.render_qa as render_qa
 
 
@@ -76,3 +77,14 @@ def test_finished_render_fails_closed_on_missing_audio_and_black_frames(tmp_path
     assert "black frame" in joined
     assert "caption group is too wide" in joined
     assert "opening hook is too long" in joined
+
+
+def test_failed_variant_does_not_clear_an_existing_safe_best(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(pipeline.db,"exec_sql",lambda sql,args=(): calls.append((sql,args)))
+    best={"id":7,"variant":"medium","qa_status":"pass"}
+    returned=pipeline._apply_render_state(42,{"passed":False},best)
+    assert returned is best
+    assert len(calls)==1
+    assert "status='rendered'" in calls[0][0]
+    assert "best_variant=''" not in calls[0][0]
