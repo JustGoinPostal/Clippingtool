@@ -2,473 +2,236 @@
 
 ## Goal
 
-Postal Creator OS is a local-first, highly automated creator operating system whose normal workflow is:
+Postal Creator OS is a local-first creator automation stack hosted on Postal's dedicated home server. The normal workflow is intentionally simple:
 
-1. Postal starts streaming.
-2. The system observes the stream, chat, OBS, game events, and account metrics.
-3. It identifies moments worth keeping and creates publishable edits.
-4. It packages and schedules content per platform.
-5. It collects performance data and learns what works on each platform.
-6. OpenAI acts as the reasoning and decision layer across the system.
-7. Postal receives concise updates only when something changed, needs attention, or is worth knowing.
+1. Postal starts OBS and streams normally.
+2. The streaming PC sends completed recordings and lightweight telemetry to `CREATOR-01` over the LAN.
+3. The server detects moments, renders clips, packages content, schedules/publishes posts, collects analytics, runs bots, and stores history.
+4. ChatGPT is the human-facing analysis and control surface when Postal wants to inspect or change something.
+5. Routine automation must continue even when ChatGPT is closed.
 
-The target is not "AI-assisted editing." The target is a self-operating creator stack that reduces routine creator-management work to nearly zero.
+The target is a one-person creator operation where streaming is the main manual task.
 
-## Operating principles
+## Hard rules
 
-- Local-first for VODs, transcripts, raw events, account tokens, and private analytics.
-- No API keys in config files or Git. Secrets come from environment variables or the existing secrets directory where appropriate.
-- Automation by default; approval only for account authorization, destructive actions, or actions explicitly placed behind an approval policy.
-- Every automated action is attributable to an event and is logged.
-- AI recommendations never silently overwrite source media or credentials.
-- Platform learning is separate by platform even when the same clean master clip is cross-posted.
-- Cost-aware model routing: cheap/high-volume analysis for routine events; stronger reasoning only when the decision is important.
-- Failure isolation: clipping, publishing, analytics, Discord, and OpenAI failures must not take down the stream.
+- Host Creator OS on a dedicated VM/server, not the streaming PC.
+- Keep `RENTAL-01` isolated and untouched.
+- Default recurring infrastructure cost target is $0 beyond services already owned.
+- No OpenAI API dependency by default.
+- Paid APIs/cloud services are optional and disabled until explicitly enabled.
+- Large media stays local.
+- Cloudflare is a secure HTTP front door, not the compute platform.
+- SMB/file ingestion stays LAN-only.
+- Destructive/security-sensitive actions require approval.
 
-## High-level architecture
+## Architecture
 
 ```text
-OBS / Kick / RuneLite / Discord / Social APIs / Local files
-                         |
-                         v
-                    EVENT BUS
-                         |
-          +--------------+--------------+
-          |              |              |
-          v              v              v
-      AutoClip       PostalBot      Analytics
-          |              |              |
-          +--------------+--------------+
-                         |
-                         v
-                    POSTAL BRAIN
-                   (OpenAI layer)
-                         |
-       +-----------------+------------------+
-       |                 |                  |
-       v                 v                  v
-  Decisions         Recommendations      Updates
-       |                 |                  |
-       v                 v                  v
- Publishing        Content Strategy   ChatGPT/Discord/UI
+STREAMING PC
+OBS / RuneLite / game / microphone
+        |
+        | LAN
+        v
+CREATOR-01 (dedicated home-server VM)
++---------------------------------------------------+
+| ingest | AutoClip | Whisper | FFmpeg | analytics |
+| bots   | queue    | scheduler | local DB/storage |
++---------------------------------------------------+
+        |
+        +--> social platform APIs (publish/metrics)
+        |
+        +--> Cloudflare Tunnel (dashboard/control only)
+        |
+        +--> ChatGPT bridge/app when available
 ```
 
-## Postal Brain responsibilities
+## Streaming-PC responsibilities
 
-Postal Brain is a reusable reasoning service, not a UI chatbot. It receives normalized events and produces structured decisions or summaries.
+The streaming PC should remain lightweight:
 
-Initial responsibilities:
+- OBS streaming/recording
+- RuneLite/game clients
+- lightweight recording handoff agent
+- lightweight OBS/RuneLite telemetry relay
 
-- Explain noteworthy stream events.
-- Score whether an event warrants attention.
-- Generate titles, hooks, captions, descriptions, and platform-specific packaging.
-- Create post-stream summaries.
-- Interpret analytics changes and identify likely causes.
-- Recommend the next content action.
-- Detect automation failures that need human attention.
-- Produce concise notification text.
+It should not perform long VOD analysis, analytics collection, social scheduling, or bot hosting once `CREATOR-01` is operational.
 
-Later responsibilities:
+## Dedicated-server responsibilities
 
-- Multi-event story detection across a whole stream.
-- Live stream co-pilot suggestions.
-- Content research with web search where enabled.
-- Thumbnail concept generation and image-generation prompts.
-- Discord community summaries and moderation assistance.
-- Platform scheduling strategy.
-- Experiment design and automatic A/B test interpretation.
-- Creator memory: recurring jokes, collaborators, series, formats, and audience preferences.
+`CREATOR-01` owns:
 
-## Event schema
+- recording ingestion
+- source VOD storage
+- local Whisper transcription
+- audio/video/event analysis
+- clip candidate detection
+- FFmpeg rendering
+- captions/hooks
+- platform-specific packaging
+- social publishing queue
+- retries
+- analytics collection
+- platform-specific learning
+- Discord/Kick bots
+- stream reports
+- content calendar/state
+- Creator dashboard
+- ChatGPT control bridge
 
-Every module should emit a normalized event.
+## Continuous automation without paid AI
 
-```json
-{
-  "event_id": "uuid",
-  "created_at": 1792812345.123,
-  "source": "runelite",
-  "kind": "player_death",
-  "priority": "high",
-  "stream_id": "optional-stream-id",
-  "payload": {},
-  "tags": ["osrs", "death"]
-}
+The always-on pipeline uses deterministic code and local processing first:
+
+```text
+recording / telemetry
+        v
+local event detection
+        v
+local scoring
+        v
+candidate clips
+        v
+local render/caption/package
+        v
+schedule/publish
+        v
+analytics
+        v
+platform-specific learning
 ```
 
-Recommended priorities:
+Local models such as Ollama may be used where they improve quality, but they are optional. The system must remain functional without a paid AI API.
 
-- `debug`: internal telemetry, no AI by default.
-- `normal`: stored and available to summaries.
-- `high`: eligible for immediate AI analysis.
-- `critical`: alert immediately and retain until acknowledged.
+## ChatGPT's role
 
-## Event sources
+ChatGPT is the operator/strategist surface, not a required runtime dependency.
 
-### OBS
+When the control bridge is connected, ChatGPT should be able to inspect:
 
-- stream_started
-- stream_ended
-- recording_started
-- recording_stopped
-- scene_changed
-- source_muted
-- source_unmuted
-- dropped_frames_high
-- encoder_overload
-
-### Kick / chat
-
-- chat_message
-- chat_velocity_spike
-- repeated_phrase
-- viewer_spike
-- follower
-- subscription
-- gifted_subscriptions
-- raid
-- moderator_action
-- clip_command_spike
-
-### RuneLite / game bridge
-
-- death
-- kill
-- rare_drop
-- raid_started
-- raid_completed
-- raid_wipe
-- boss_kill
-- big_hit
-- pvp_event
-- collection_log
-
-### AutoClip
-
-- candidate_created
-- candidate_scored
-- render_completed
-- render_failed
-- publish_queued
-- publish_completed
-- publish_failed
-
-### Analytics
-
-- analytics_refresh_completed
-- clip_outperforming
-- clip_underperforming
-- retention_anomaly
-- follower_conversion_spike
-- platform_growth_change
-
-## AI model routing
-
-Do not use the strongest model for every event.
-
-### Fast lane
-
-Use for:
-
-- classification
-- short summaries
-- title/caption variants
-- notification wording
-- basic clip analysis
-
-### Reasoning lane
-
-Use for:
-
-- post-stream strategy
-- analytics diagnosis
-- deciding which content formats to emphasize
-- cross-platform conflicts
-- experiment analysis
-- complex failure recovery recommendations
-
-### Realtime lane
-
-Use only where latency materially improves the stream experience:
-
-- optional live transcription
-- optional live co-pilot
-- voice interaction
-- rapid stream-state interpretation
-
-Routine stream transcription should remain local when local Whisper is sufficient, then send only relevant transcript windows to OpenAI. This controls cost and preserves privacy.
-
-## OpenAI integration map
-
-### Responses API
-
-Primary reasoning interface for Postal Brain.
-
-Use cases:
-
-- event interpretation
-- structured decisions
-- strategy reports
-- copy generation
-- tool/function calling into Postal Creator OS
-
-### Function calling
-
-Expose safe creator actions as functions, for example:
-
-- get_stream_status
-- get_recent_events
-- get_clip
-- render_clip
-- queue_clip
-- get_platform_analytics
-- build_distribution_plan
-- send_discord_update
-- update_stream_metadata
-
-Actions are classified by approval policy.
-
-### Realtime / transcription
-
-Optional second-stage live intelligence. Local transcription remains the default for full VOD processing; Realtime is reserved for features that benefit from low latency.
-
-### Web search
-
-Use for trend/research tasks, not for every stream event. Research jobs should have explicit budgets and cache results.
-
-### Image generation
-
-Use for thumbnail concepts, social graphics, announcements, and branding assets after a content decision is made.
-
-### Background responses + webhooks
-
-Long-running strategy/research jobs may run asynchronously at the API level, with completion delivered back to Postal Creator OS by webhook. The local system should persist a job record so process restarts do not lose work.
-
-## ChatGPT integration
-
-The API-based Postal Brain and ChatGPT are complementary.
-
-### Custom Postal Creator plugin / MCP server
-
-Postal Creator OS should expose a secured MCP server that ChatGPT can connect to. This lets ChatGPT directly inspect and control the creator system instead of requiring copied logs or screenshots.
-
-Initial MCP tools:
-
-- creator_status
-- current_stream
-- recent_streams
-- recent_events
-- clips
-- clip_detail
-- analytics_summary
-- platform_summary
-- publishing_queue
+- current system health
+- current/previous streams
+- recent events
+- detected clips
+- publishing queue
+- analytics
 - failures
-- recommendations
-- approve_action
-- reject_action
+- local recommendations
 
-Later writable tools:
+And, where supported and permitted, perform safe actions such as:
 
-- render
-- schedule
-- publish
-- change_title
-- change_category
-- send_discord_message
-- update_content_calendar
+- render a clip
+- schedule a clip
+- publish a clip
+- change posting settings
+- restart a failed worker
+- update a content plan
 
-### ChatGPT scheduled updates
+Until direct app access is available for the account, a replaceable control bridge (for example GitHub-backed command/state exchange) may be used without redesigning the core system.
 
-Once the plugin is connected, recurring ChatGPT tasks can request periodic creator summaries. These are ideal for hourly or daily updates that should appear inside ChatGPT.
-
-### Event-triggered updates
-
-Where a connected app supports event-triggered tasks, use them for external events. Postal Creator OS should also publish important alerts to Discord immediately, because ChatGPT scheduled tasks are not a sub-minute notification transport.
-
-### Dot / proactive agent
-
-If available on the account, a dedicated Postal creator dot can use connected creator information, scheduled work, and proactive research as an additional personal-agent surface.
-
-## Notification policy
-
-The system should not spam Postal.
-
-### Immediate
-
-- stream health problem
-- account authentication expired
-- publishing failure after retries
-- viral/outlier content event
-- platform policy/API failure affecting automation
-- unusually large gifted-sub/revenue event if enabled
-
-### During stream, batched
-
-- high-confidence clip moments
-- chat/viewer spikes
-- content opportunity suggestions
-
-### Post-stream
-
-Send exactly one primary report containing:
-
-- stream duration
-- average/peak viewers if available
-- follows/subs/gifts if available
-- best detected moments
-- clips created
-- content queued
-- failures
-- recommendation for the next stream/content action
-
-### Daily
-
-- platform growth
-- best/worst posts
-- unusual analytics changes
-- queue health
-- recommended actions
-
-## Autonomy policy
+## Automation policy
 
 ### Fully automatic
 
-- ingest recordings
+- ingest completed recordings
 - transcribe
 - detect candidates
 - render variants
-- score variants
+- create captions
+- rank variants
+- schedule according to configured policy
+- publish according to configured policy
 - gather analytics
-- retry transient API failures
-- generate drafts
-- prepare schedules
-- archive low-value intermediate files according to retention policy
+- retry transient failures
+- update Discord/go-live state
+- create post-stream/local reports
 
-### Automatic after account setup
+### Approval required
 
-- publish approved/high-confidence content under configured policy
-- cross-post
-- collect platform metrics
-- Discord go-live and post-stream updates
-
-### Approval required by default
-
-- changing connected-account credentials
-- deleting published content
 - deleting source VODs
-- spending above a configured API budget
+- deleting published posts
+- credential/security changes
 - mass messaging
-- actions that could lock or ban an account
-- changing security settings
+- account actions that could create a ban/lockout risk
+- enabling any paid service/API
 
-## Recommended local services
+## Data/storage
 
-Initially keep this a single Windows-friendly application and split services only when load requires it.
+Use local storage for:
 
-Logical modules:
+- VODs
+- clips/renders
+- transcripts
+- event logs
+- analytics
+- local configuration
 
-- `postal_brain` - OpenAI reasoning and decision layer
-- `event_bus` - event persistence and subscriptions
-- `autoclip` - existing clipping pipeline
-- `publisher` - existing posting queue
-- `analytics` - existing collectors and learning
-- `postal_bot` - Kick/Discord automation
-- `obs_bridge` - OBS WebSocket integration
-- `creator_mcp` - ChatGPT/MCP interface
-- `notifications` - Discord/desktop/ChatGPT update routing
+Start with SQLite for application/event metadata. Move to PostgreSQL only if the workload later justifies it. Video files are never stored as database blobs.
 
-Storage progression:
+## Network/security
 
-1. Existing SQLite while single-machine/local.
-2. Move event/analytics workloads to PostgreSQL only when scale or remote access makes it useful.
-3. Store large media on local disks; database stores metadata and paths, not video blobs.
+- Creator VM lives on the existing private Proxmox network.
+- SMB ingest is LAN-only.
+- Do not port-forward raw Creator services.
+- Cloudflare Tunnel/Access may expose authenticated HTTP dashboard/control surfaces.
+- Social credentials belong on `CREATOR-01` when possible.
+- Never commit credentials or tokens to Git.
 
-## Security boundaries
+## Implementation sequence
 
-- OpenAI key: `OPENAI_API_KEY` environment variable only.
-- Platform credentials remain in ignored secret files or OS credential storage.
-- MCP server starts local-only by default.
-- Remote MCP exposure requires HTTPS, authentication, and explicit tool allowlists.
-- Writable MCP tools must validate parameters and enforce approval policy server-side.
-- Never expose raw API keys through the dashboard or MCP responses.
+### 1. Dedicated server + zero-touch ingestion
 
-## Cost controls
+- create `CREATOR-01`
+- create local Creator directories
+- create authenticated `postal-ingest` SMB share
+- run streaming-PC handoff agent
+- verify completed OBS recordings arrive automatically
 
-Track AI usage per stream and per feature.
+### 2. Server-side AutoClip
 
-Configuration should include:
+- make existing AutoClip Linux/server friendly
+- automatic ingest worker
+- local Whisper/FFmpeg pipeline
+- server-hosted dashboard
 
-- daily AI budget
-- per-stream AI budget
-- maximum live requests per minute
-- model routing policy
-- maximum trend-research calls per day
-- whether live Realtime features are enabled
+### 3. Stream telemetry
 
-When a soft limit is reached, degrade gracefully to local heuristics instead of stopping the creator pipeline.
+- OBS WebSocket relay
+- RuneLite event relay
+- Kick/chat collector
+- chat/viewer spike detection
+- crowd `!clip` signal
 
-## v1 implementation sequence
+### 4. Distribution + analytics
 
-### Milestone 1 - Postal Brain foundation
+- automatic render selection
+- cross-platform scheduling
+- posting/retry workers
+- analytics collection
+- per-platform learning
 
-- Normalized event model.
-- Persistent JSONL event log initially.
-- Responses API client.
-- AI health/status.
-- Manual `ask`/analysis endpoint.
-- AI usage/cost telemetry.
-- Approval-policy primitives.
+### 5. Bots + notifications
 
-### Milestone 2 - AutoClip integration
+- Discord/Kick bot hosted on server
+- go-live/stream-end automation
+- immediate failure alerts
+- local post-stream reports
 
-- Emit job, candidate, render, publish, and analytics events.
-- Ask Postal Brain for second-pass clip interpretation only on top candidates.
-- Generate platform packaging from the same master clip.
-- Produce automatic post-stream report.
+### 6. ChatGPT control plane
 
-### Milestone 3 - Stream telemetry
-
-- OBS WebSocket bridge.
-- Kick/chat bridge.
-- Chat-velocity and viewer-spike detection.
-- Live high-confidence clip markers.
-
-### Milestone 4 - PostalBot + Discord
-
-- Discord creator hub automation.
-- Go-live notices.
-- Stream summaries.
-- Moderator commands.
-- `!clip` crowd signal.
-
-### Milestone 5 - ChatGPT control plane
-
-- Local MCP server.
-- Read-only tools first.
-- Writable tools after validation.
-- ChatGPT scheduled creator briefs.
-- Optional event-driven integrations where supported.
-
-### Milestone 6 - Content strategy automation
-
-- Trend research.
-- Content calendar.
-- Long-form VOD story extraction.
-- Thumbnail concepts/images.
-- Platform-specific strategy model.
-- Experiments and automatic interpretation.
+- expose safe status/actions through a replaceable bridge
+- connect a Postal Creator ChatGPT app/plugin where account support allows it
+- keep all server-side approval rules independent of ChatGPT
 
 ## Definition of success
 
-A successful normal day looks like this:
+A successful normal day:
 
-- Postal launches the creator stack once.
-- Postal streams.
-- Postal does not manually mark timestamps.
-- Postal does not manually cut Shorts.
-- Postal does not manually copy captions between platforms.
-- Postal does not manually check three analytics dashboards.
-- Postal receives a concise post-stream summary and only actionable alerts.
-- The next day's content queue is already prepared or published according to policy.
-- ChatGPT can answer "what happened on stream?", "what should I do next?", and "why did this clip perform well?" directly from the creator system.
+- Postal opens OBS and streams.
+- Postal does not move VOD files manually.
+- Postal does not mark clip timestamps manually.
+- Postal does not cut Shorts manually.
+- Postal does not copy captions between platforms manually.
+- Postal does not manually check multiple analytics dashboards.
+- Creator OS continues operating when ChatGPT is closed.
+- Postal can open ChatGPT and ask what happened, what is working, what failed, or request a safe change.
+- The next content queue is already prepared/published according to policy.
