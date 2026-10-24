@@ -1,0 +1,22 @@
+# Postal Creator OS - single Cloudflare Tunnel example
+# Copy to your cloudflared config location and replace the tunnel UUID/credentials path.
+# Do not commit the credentials JSON.
+
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: REPLACE_WITH_CLOUDFLARED_CREDENTIALS_JSON_PATH
+
+ingress:
+  # Human dashboard. Protect this hostname with Cloudflare Access.
+  - hostname: creator.postalops.com
+    service: http://127.0.0.1:8787
+
+  # ChatGPT / MCP control plane. Enforce application-level auth in the MCP gateway.
+  - hostname: mcp.postalops.com
+    service: http://127.0.0.1:8790
+
+  # Optional signed external webhooks. Validate provider signatures in-app.
+  - hostname: hooks.postalops.com
+    service: http://127.0.0.1:8791
+
+  # Required catch-all.
+  - service: http_status:404
