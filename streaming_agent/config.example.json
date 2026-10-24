@@ -1,0 +1,12 @@
+{
+  "recording_folders": [
+    "C:\\Users\\YOURNAME\\Videos"
+  ],
+  "server_share": "\\\\10.10.10.20\\postal-ingest",
+  "extensions": [".mkv", ".mp4", ".mov", ".ts"],
+  "poll_seconds": 20,
+  "stable_seconds": 120,
+  "copy_retries": 10,
+  "retry_seconds": 30,
+  "state_file": "streaming_agent_state.json"
+}
